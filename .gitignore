@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.idea/
+chroma_db/
+chat_history/
+.env
+logs/
+md5.text
+*_md5.text
+frontend/node_modules/
+frontend/dist/

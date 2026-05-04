@@ -1,0 +1,12 @@
+services:
+  chroma:
+    image: chromadb/chroma
+    container_name: rag-chroma
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/data
+
+volumes:
+  chroma_data:
