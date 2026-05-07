@@ -52,7 +52,8 @@ async function submitRegister() {
 
   loading.value = true;
   try {
-    const user = await register(form);
+    const { confirmPassword, ...payload } = form;
+    const user = await register(payload);
     ElMessage.success("注册成功，已自动登录。");
     router.push({ name: resolveHomeRoute(user) });
   } catch (error) {
