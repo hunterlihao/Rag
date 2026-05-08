@@ -1,10 +1,3 @@
-import {
-  ChatDotRound,
-  CollectionTag,
-  Setting,
-  UserFilled,
-} from "@element-plus/icons-vue";
-
 export function normalizeShellSession(session) {
   return {
     id: session.id,
@@ -20,46 +13,22 @@ export function normalizeShellSession(session) {
 
 export function buildSidebarNavItems(user) {
   const items = [
-    {
-      name: "workspace",
-      label: "问答主页",
-      description: "集中提问、追问与查看历史回答",
-      icon: ChatDotRound,
-    },
-    {
-      name: "knowledge",
-      label: "知识库",
-      description: "独立导入文件并维护当前账号向量库",
-      icon: CollectionTag,
-    },
+    { name: "workspace", label: "问答主页" },
+    { name: "knowledge", label: "知识库" },
   ];
 
   if (user?.isAdmin) {
-    items.push({
-      name: "admin-users",
-      label: "用户管理",
-      description: "管理员可维护系统用户与权限",
-      icon: UserFilled,
-    });
+    items.push({ name: "admin-users", label: "用户管理" });
   }
 
-  items.push({
-    name: "settings",
-    label: "设置中心",
-    description: "修改资料、密码和个性化偏好",
-    icon: Setting,
-  });
+  items.push({ name: "settings", label: "设置中心" });
 
   return items;
 }
 
 export function buildRouteLocation(name, sessionId = "") {
   if (name === "workspace" || name === "knowledge") {
-    return {
-      name,
-      query: sessionId ? { session: sessionId } : {},
-    };
+    return { name, query: sessionId ? { session: sessionId } : {} };
   }
-
   return { name };
 }

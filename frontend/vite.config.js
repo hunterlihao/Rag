@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from "node:url";
 
 import { defineConfig, loadEnv } from "vite";
 import vue from "@vitejs/plugin-vue";
+import tailwindcss from "@tailwindcss/vite";
 
 function parseAllowedHosts(rawValue) {
   return String(rawValue || "")
@@ -18,7 +19,7 @@ export default defineConfig(({ mode }) => {
   const proxyTarget = (env.VITE_PROXY_TARGET || "http://127.0.0.1:8520").trim();
 
   return {
-    plugins: [vue()],
+    plugins: [vue(), tailwindcss()],
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -29,7 +30,6 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks: {
             vue: ["vue", "vue-router"],
-            element: ["element-plus", "@element-plus/icons-vue"],
           },
         },
       },

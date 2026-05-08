@@ -1,972 +1,295 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
-  Cpu,
-  Delete,
-  DocumentAdd,
-  Files,
-  Search,
-  UploadFilled,
-} from "@element-plus/icons-vue";
+  Upload, Trash2, FileText, X, Loader2, CheckCircle, AlertCircle,
+  Search, Files, Cpu, Database, Server, File, Check,
+} from "lucide-vue-next";
+import { formatRelativeTime, deleteUpload, deleteUploads } from "@/services/workspace";
 
 const props = defineProps({
-  busy: {
-    type: Boolean,
-    default: false,
-  },
-  uploadTasks: {
-    type: Array,
-    default: () => [],
-  },
-  uploads: {
-    type: Array,
-    default: () => [],
-  },
-  totalUploadCount: {
-    type: Number,
-    default: 0,
-  },
-  modelSettings: {
-    type: Object,
-    required: true,
-  },
-  pageMode: {
-    type: Boolean,
-    default: false,
-  },
-  deletingUploadId: {
-    type: String,
-    default: "",
-  },
-  batchDeleting: {
-    type: Boolean,
-    default: false,
-  },
-  selectedUploadIds: {
-    type: Array,
-    default: () => [],
-  },
-  allUploadsSelected: {
-    type: Boolean,
-    default: false,
-  },
-  selectedUploadCount: {
-    type: Number,
-    default: 0,
-  },
-  uploadSearch: {
-    type: String,
-    default: "",
-  },
+  busy: { type: Boolean, default: false },
+  uploadTasks: { type: Array, default: () => [] },
+  uploads: { type: Array, default: () => [] },
+  totalUploadCount: { type: Number, default: 0 },
+  modelSettings: { type: Object, default: () => ({ chatModel: "", embeddingModel: "", provider: "" }) },
+  pageMode: { type: Boolean, default: false },
+  deletingUploadId: { type: String, default: "" },
+  batchDeleting: { type: Boolean, default: false },
+  selectedUploadIds: { type: Array, default: () => [] },
+  allUploadsSelected: { type: Boolean, default: false },
+  selectedUploadCount: { type: Number, default: 0 },
+  uploadSearch: { type: String, default: "" },
 });
 
 const emit = defineEmits([
-  "import-files",
-  "delete-file",
-  "batch-delete",
-  "toggle-select-all",
-  "toggle-upload",
-  "update:upload-search",
+  "import-files", "delete-file", "batch-delete",
+  "toggle-select-all", "toggle-upload", "update:upload-search",
 ]);
 
-const draftFiles = ref([]);
+const dragOver = ref(false);
 
 const operationBusy = computed(() => props.busy || props.batchDeleting || !!props.deletingUploadId);
-const canImport = computed(() => !operationBusy.value && draftFiles.value.length > 0);
-const draftFileCount = computed(() => draftFiles.value.length);
-const busyNotice = computed(() => {
-  if (props.batchDeleting || props.deletingUploadId) {
-    return "知识库内容正在删除中，上传入口已暂时锁定。";
-  }
-  return props.pageMode
-    ? "文件正在写入当前账号知识库，上传入口已暂时锁定。"
-    : "模型正在回答中，文件上传已暂时锁定。";
-});
-const panelTitle = computed(() => (props.pageMode ? "知识库管理" : "知识区"));
-const panelSubtitle = computed(() => {
-  return props.pageMode
-    ? "上传文件、查看导入历史，并维护当前账号的专属向量知识库。"
-    : "上传文件、查看模型信息，并直接写入当前知识库。";
-});
-const uploadListHeight = computed(() => (props.pageMode ? 180 : 240));
-const uploadQueueHeight = computed(() => (props.pageMode ? 220 : 180));
-const uploadEmptyDescription = computed(() => {
-  if (props.totalUploadCount > 0 && props.uploadSearch.trim()) {
-    return "没有匹配的文件";
-  }
-  return "还没有导入文件";
-});
-const uploadEmptyHint = computed(() => {
-  if (props.totalUploadCount > 0 && props.uploadSearch.trim()) {
-    return "可以调整关键词后重新搜索。";
-  }
-  return "可继续上传 PDF / Word / Excel / CSV / Markdown / TXT 文件。";
-});
+const canImport = computed(() => !props.busy && draftFiles.value.length > 0);
+const draftFiles = ref([]);
+
 const visibleUploadCountLabel = computed(() => {
-  if (props.uploadSearch.trim()) {
-    return `匹配 ${props.uploads.length} / ${props.totalUploadCount}`;
-  }
-  return `共 ${props.totalUploadCount} 个文件`;
-});
-const selectedUploadSummary = computed(() => {
-  if (props.selectedUploadCount > 0) {
-    return `已选 ${props.selectedUploadCount} 个文件`;
-  }
-  return "支持批量删除已选文件";
+  const total = props.totalUploadCount || props.uploads.length;
+  const visible = props.uploads.length;
+  if (props.uploadSearch.trim() && visible !== total) return `匹配 ${visible} / ${total}`;
+  return `共 ${total} 个文件`;
 });
 
 function resolveFileLabel(file) {
-  const name = String(file?.name || "");
-  const parts = name.split(".");
-  const extension = parts.length > 1 ? parts.pop() : "";
-  if (extension) {
-    return extension.toUpperCase().slice(0, 5);
-  }
-
-  const mime = String(file?.type || "");
-  if (mime.includes("pdf")) return "PDF";
-  if (mime.includes("word")) return "DOC";
-  if (mime.includes("sheet") || mime.includes("excel")) return "XLS";
-  if (mime.includes("csv")) return "CSV";
-  if (mime.includes("text")) return "TXT";
-  return "FILE";
+  const ext = (file.name || file.filename || "").split(".").pop()?.toLowerCase();
+  if (!ext) return "FILE";
+  const map = { pdf: "PDF", docx: "DOC", doc: "DOC", xlsx: "XLS", xls: "XLS", csv: "CSV", txt: "TXT", md: "MD" };
+  return map[ext] || ext.toUpperCase();
 }
 
 function resolveFileTypeText(file) {
-  const label = resolveFileLabel(file);
-  if (["XLS", "XLSX"].includes(label)) return "Excel 表格";
-  if (["CSV"].includes(label)) return "CSV 文件";
-  if (["MD"].includes(label)) return "Markdown 文档";
-  if (["PDF"].includes(label)) return "PDF 文档";
-  if (["DOC", "DOCX"].includes(label)) return "Word 文档";
-  if (["TXT"].includes(label)) return "文本文件";
-  return "普通文件";
+  const ext = (file.name || file.filename || "").split(".").pop()?.toLowerCase();
+  const map = { pdf: "PDF 文档", docx: "Word 文档", xlsx: "Excel 表格", xls: "Excel 表格", csv: "CSV 表格", txt: "文本文件", md: "Markdown 文档" };
+  return map[ext] || `${(ext || "unknown").toUpperCase()} 文件`;
 }
 
+function formatSize(bytes) {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function resolveTaskLabel(status) {
+  const map = { uploading: "上传中", processing: "处理中", success: "已完成", error: "失败", duplicate: "已存在" };
+  return map[status] || status;
+}
+
+function resolveProgressStatus(status) {
+  if (status === "success") return "success";
+  if (status === "error") return "exception";
+  return "";
+}
+
+function onDragEnter(e) { e.preventDefault(); dragOver.value = true; }
+function onDragLeave(e) { e.preventDefault(); dragOver.value = false; }
+function onDragOver(e) { e.preventDefault(); }
+
+function onDrop(e) {
+  e.preventDefault();
+  dragOver.value = false;
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) draftFiles.value = [...draftFiles.value, ...files];
+}
+
+function onFileSelect(e) {
+  const files = Array.from(e.target.files || []);
+  if (files.length) draftFiles.value = [...draftFiles.value, ...files];
+  e.target.value = "";
+}
+
+function removeDraft(index) { draftFiles.value.splice(index, 1); }
+
 function handleImport() {
-  if (!canImport.value) {
-    return;
-  }
+  if (!canImport.value) return;
   emit("import-files", [...draftFiles.value]);
   draftFiles.value = [];
 }
 
-function requestDelete(file) {
-  if (props.deletingUploadId || props.batchDeleting) {
-    return;
-  }
+function handleDelete(file) {
+  if (operationBusy.value) return;
   emit("delete-file", file);
 }
 
-function toggleUpload(file, checked) {
-  emit("toggle-upload", {
-    id: file.id,
-    checked,
-  });
+function handleBatchDelete() {
+  if (operationBusy.value || props.selectedUploadCount === 0) return;
+  emit("batch-delete");
 }
 
-function resolveTaskLabel(status) {
-  return {
-    waiting: "排队中",
-    uploading: "上传中",
-    processing: "入库中",
-    success: "已完成",
-    warning: "已跳过",
-    error: "失败",
-  }[status] || "处理中";
-}
+function toggleSelectAll(e) { emit("toggle-select-all", e.target.checked); }
+function toggleUpload(file, checked) { emit("toggle-upload", { id: file.id, checked }); }
 
-function resolveProgressStatus(status) {
-  if (status === "success") {
-    return "success";
-  }
-  if (status === "error") {
-    return "exception";
-  }
-  return "";
-}
+watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
 </script>
 
 <template>
-  <aside class="knowledge-dock soft-card" :class="{ 'knowledge-dock--page': pageMode }">
-    <div class="knowledge-dock__header">
-      <div>
-        <div class="section-title">{{ panelTitle }}</div>
-        <div class="section-subtitle">{{ panelSubtitle }}</div>
-      </div>
-      <div class="badge-chip">RAG</div>
+  <div class="flex flex-col h-full">
+    <!-- Busy notice -->
+    <div v-if="operationBusy" class="mx-4 mt-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 flex items-center gap-2 shrink-0">
+      <Loader2 class="w-3.5 h-3.5 animate-spin" />
+      知识库操作正在进行，请等待完成后再操作。
     </div>
 
-    <div class="knowledge-stage">
-      <el-alert
-        v-if="operationBusy"
-        class="knowledge-stage__alert"
-        type="info"
-        :closable="false"
-        show-icon
-        :title="busyNotice"
-      />
+    <!-- ===== Import section ===== -->
+    <div class="px-4 pt-3 shrink-0">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <span class="text-xs font-semibold text-zinc-700">导入文件</span>
+          <span class="text-xs text-zinc-400 ml-2">{{ draftFiles.length ? `待导入 ${draftFiles.length}` : '拖拽或点击上传' }}</span>
+        </div>
+        <button
+          v-if="draftFiles.length"
+          @click="handleImport"
+          :disabled="!canImport"
+          class="px-3 py-1.5 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors disabled:opacity-50 flex items-center gap-1"
+        >
+          <Upload class="w-3 h-3" /> 导入到知识库
+        </button>
+      </div>
 
-      <section class="knowledge-panel">
-        <div class="knowledge-panel__head">
-          <div>
-            <div class="knowledge-panel__title">导入文件</div>
-            <div class="knowledge-panel__subtitle">支持一次选择多个文件，并按配置并发写入当前账号知识库。</div>
+      <!-- Drop zone -->
+      <div
+        @dragenter="onDragEnter" @dragleave="onDragLeave" @dragover="onDragOver" @drop="onDrop"
+        :class="['border-2 border-dashed rounded-xl p-4 text-center transition-colors cursor-pointer', dragOver ? 'border-[#0a0a0a] bg-zinc-50' : 'border-zinc-200 hover:border-zinc-300 bg-zinc-50/50']"
+        @click="$refs.fileInput.click()"
+      >
+        <Upload class="w-6 h-6 text-zinc-400 mx-auto mb-2" />
+        <p class="text-xs text-zinc-500">拖拽文件到此处，或点击选择</p>
+        <p class="text-[10px] text-zinc-400 mt-1">支持 PDF、Word、Excel、CSV、Markdown、TXT</p>
+        <input ref="fileInput" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.xls,.csv" @change="onFileSelect" class="hidden" />
+      </div>
+
+      <!-- Draft files -->
+      <div v-if="draftFiles.length" class="mt-2 space-y-1 max-h-32 overflow-y-auto">
+        <div v-for="(f, i) in draftFiles" :key="i" class="flex items-center gap-2 px-2 py-1.5 bg-zinc-50 rounded-lg text-xs">
+          <FileText class="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          <span class="flex-1 truncate text-zinc-600">{{ f.name }}</span>
+          <span class="text-zinc-400 shrink-0">{{ formatSize(f.size) }}</span>
+          <button @click.stop="removeDraft(i)" class="p-0.5 text-zinc-400 hover:text-red-500 rounded"><X class="w-3 h-3" /></button>
+        </div>
+      </div>
+
+      <!-- Upload tasks progress -->
+      <div v-if="uploadTasks.length" class="mt-2 space-y-1.5 max-h-40 overflow-y-auto">
+        <div v-for="(task, i) in uploadTasks" :key="i" class="px-2 py-1.5 bg-white border border-zinc-100 rounded-lg">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs text-zinc-600 truncate flex-1">{{ task.name || task.filename }}</span>
+            <span :class="['text-[10px] font-medium ml-2', task.status === 'success' ? 'text-emerald-600' : task.status === 'error' ? 'text-red-500' : 'text-zinc-500']">{{ resolveTaskLabel(task.status) }}</span>
           </div>
-          <div class="knowledge-panel__meta">
-            <span class="knowledge-pill">{{ draftFileCount ? `待导入 ${draftFileCount}` : "支持并发导入" }}</span>
+          <div class="flex items-center gap-2">
+            <div class="flex-1 h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+              <div
+                :class="['h-full rounded-full transition-all duration-300', task.status === 'success' ? 'bg-emerald-500' : task.status === 'error' ? 'bg-red-400' : 'bg-[#0a0a0a]']"
+                :style="{ width: `${task.progress || 0}%` }"
+              />
+            </div>
+            <span class="text-[10px] text-zinc-400 w-8 text-right">{{ task.progress || 0 }}%</span>
           </div>
         </div>
+      </div>
+    </div>
 
-        <div class="knowledge-upload-grid" :class="{ 'knowledge-upload-grid--single': !pageMode }">
-          <div class="knowledge-upload-main">
-            <el-upload
-              v-model:file-list="draftFiles"
-              drag
-              multiple
-              :auto-upload="false"
-              accept=".pdf,.docx,.xlsx,.xls,.csv,.md,.txt"
-              :disabled="operationBusy"
-              class="knowledge-dock__upload"
-            >
-              <el-icon class="knowledge-dock__upload-icon"><UploadFilled /></el-icon>
-              <div class="knowledge-dock__upload-title">拖入文件到这里，或者点击选择</div>
-              <div class="knowledge-dock__upload-subtitle">支持 PDF / Word / Excel / CSV / Markdown / TXT</div>
-            </el-upload>
-
-            <div class="knowledge-upload-actions">
-              <div class="knowledge-upload-caption">
-                <strong>{{ draftFileCount ? `已选择 ${draftFileCount} 个文件` : "准备导入你的资料" }}</strong>
-                <span>重复文件会直接提醒，不会重复写入向量库。</span>
-              </div>
-              <el-button
-                type="primary"
-                class="knowledge-dock__import"
-                :icon="DocumentAdd"
-                :disabled="!canImport"
-                @click="handleImport"
-              >
-                导入到知识区
-              </el-button>
-            </div>
-          </div>
-
-          <div class="knowledge-upload-side">
-            <div class="knowledge-side-card">
-              <div class="knowledge-side-card__head">
-                <strong>{{ uploadTasks.length ? "导入进度" : "导入说明" }}</strong>
-                <span>{{ uploadTasks.length ? `任务 ${uploadTasks.length}` : "专属知识库" }}</span>
-              </div>
-
-              <template v-if="uploadTasks.length">
-                <el-scrollbar :max-height="uploadQueueHeight">
-                  <div class="upload-queue">
-                    <div v-for="task in uploadTasks" :key="task.id" class="upload-task">
-                      <div class="upload-task__head">
-                        <strong>{{ task.name }}</strong>
-                        <el-tag
-                          size="small"
-                          effect="plain"
-                          :type="task.status === 'error' ? 'danger' : task.status === 'success' ? 'success' : task.status === 'warning' ? 'warning' : 'info'"
-                        >
-                          {{ resolveTaskLabel(task.status) }}
-                        </el-tag>
-                      </div>
-
-                      <div class="upload-task__meta">
-                        {{ (task.size / 1024).toFixed(1) }} KB
-                        <span v-if="task.message">· {{ task.message }}</span>
-                      </div>
-
-                      <el-progress
-                        :percentage="task.progress"
-                        :stroke-width="10"
-                        :status="resolveProgressStatus(task.status)"
-                        :show-text="true"
-                      />
-                    </div>
-                  </div>
-                </el-scrollbar>
-              </template>
-
-              <div v-else class="knowledge-rule-list">
-                <div class="knowledge-rule-item">
-                  <strong>账户隔离</strong>
-                  <span>文件只写入当前登录用户自己的 collection。</span>
-                </div>
-                <div class="knowledge-rule-item">
-                  <strong>重复检测</strong>
-                  <span>导入过的同名同内容文件会直接提示，不重复入库。</span>
-                </div>
-                <div class="knowledge-rule-item">
-                  <strong>向量检索</strong>
-                  <span>当前会结合 Embedding 和余弦相似度完成召回。</span>
-                </div>
-              </div>
-            </div>
-          </div>
+    <!-- ===== Uploaded files section ===== -->
+    <div class="flex-1 flex flex-col min-h-0 px-4 mt-4">
+      <div class="flex items-center justify-between mb-2 shrink-0">
+        <div class="flex items-center gap-2">
+          <Files class="w-4 h-4 text-zinc-500" />
+          <span class="text-xs font-semibold text-zinc-700">已导入文件</span>
         </div>
-      </section>
+        <span class="text-[10px] text-zinc-400 bg-zinc-100 px-1.5 py-0.5 rounded-full">{{ visibleUploadCountLabel }}</span>
+      </div>
 
-      <section class="knowledge-panel">
-        <div class="knowledge-panel__head knowledge-panel__head--library">
-          <div>
-            <div class="knowledge-panel__title knowledge-panel__title--inline">
-              <el-icon><Files /></el-icon>
-              <span>已导入文件</span>
-            </div>
-            <div class="knowledge-panel__subtitle">支持按文件名搜索，删除时会同步移除对应的向量内容。</div>
-          </div>
-          <div class="knowledge-panel__meta knowledge-panel__meta--library">
-            <span class="knowledge-pill">{{ visibleUploadCountLabel }}</span>
-            <span class="knowledge-pill knowledge-pill--soft">{{ selectedUploadSummary }}</span>
-          </div>
+      <!-- Search & batch actions -->
+      <div class="flex items-center gap-2 mb-2 shrink-0">
+        <div class="relative flex-1">
+          <Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-400" />
+          <input
+            :value="uploadSearch"
+            @input="emit('update:upload-search', $event.target.value)"
+            placeholder="搜索文件..."
+            class="w-full h-7 pl-7 pr-2 bg-zinc-50 border border-zinc-100 rounded-lg text-xs focus:outline-none focus:border-zinc-200 transition-colors"
+          />
+        </div>
+        <label v-if="pageMode" class="flex items-center gap-1 text-xs text-zinc-500 cursor-pointer select-none shrink-0">
+          <input type="checkbox" :checked="allUploadsSelected" @change="toggleSelectAll" class="w-3.5 h-3.5 rounded border-zinc-300 text-[#0a0a0a]" />
+          全选
+        </label>
+        <button
+          v-if="pageMode && selectedUploadCount > 0"
+          @click="handleBatchDelete"
+          :disabled="operationBusy"
+          class="px-2 py-1 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors flex items-center gap-1 shrink-0 disabled:opacity-50"
+        >
+          <Trash2 class="w-3 h-3" /> 删除 ({{ selectedUploadCount }})
+        </button>
+      </div>
+
+      <!-- File list -->
+      <div class="flex-1 overflow-y-auto" :class="pageMode ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2' : 'space-y-1'">
+        <div v-if="!uploads.length" class="col-span-full flex flex-col items-center justify-center py-8 text-center">
+          <FileText class="w-8 h-8 text-zinc-300 mb-2" />
+          <p class="text-xs text-zinc-400">{{ uploadSearch.trim() ? '没有匹配的文件' : '还没有导入文件' }}</p>
+          <p class="text-[10px] text-zinc-300 mt-0.5">{{ uploadSearch.trim() ? '尝试其他搜索词' : '上传文档来构建你的知识库' }}</p>
         </div>
 
-        <div class="knowledge-library-toolbar">
-          <el-input
-            :model-value="uploadSearch"
-            clearable
-            class="knowledge-library-toolbar__search"
-            placeholder="按文件名称搜索"
-            :prefix-icon="Search"
-            @update:model-value="emit('update:upload-search', $event)"
+        <div
+          v-for="upload in uploads" :key="upload.id"
+          :class="['group relative bg-white border rounded-xl transition-all', pageMode ? 'p-3' : 'flex items-center gap-2 px-3 py-2', selectedUploadIds.includes(upload.id) ? 'border-[#0a0a0a] bg-zinc-50' : 'border-zinc-100 hover:border-zinc-300']"
+        >
+          <!-- Checkbox (pageMode: top-left) -->
+          <input
+            v-if="pageMode"
+            type="checkbox"
+            :checked="selectedUploadIds.includes(upload.id)"
+            @change="toggleUpload(upload, $event.target.checked)"
+            class="absolute top-2.5 left-2.5 w-3.5 h-3.5 rounded border-zinc-300 text-[#0a0a0a] z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+            :class="{ 'opacity-100': selectedUploadIds.includes(upload.id) }"
           />
 
-          <div v-if="pageMode && (uploads.length || totalUploadCount)" class="knowledge-dock__bulk-actions">
-            <el-checkbox
-              :model-value="allUploadsSelected"
-              :disabled="busy || batchDeleting || !!deletingUploadId"
-              @update:model-value="emit('toggle-select-all', $event)"
-            >
-              全选
-            </el-checkbox>
-            <el-button
-              plain
-              size="small"
-              :icon="Delete"
-              :loading="batchDeleting"
-              :disabled="busy || batchDeleting || !!deletingUploadId || selectedUploadCount === 0"
-              @click="emit('batch-delete')"
-            >
-              批量删除
-            </el-button>
+          <!-- File icon -->
+          <div :class="['rounded-lg flex items-center justify-center shrink-0', pageMode ? 'w-10 h-10 mb-2 ml-1' : 'w-8 h-8', upload.status === 'success' ? 'bg-emerald-50' : upload.status === 'error' ? 'bg-red-50' : 'bg-zinc-100']">
+            <FileText :class="[upload.status === 'success' ? 'text-emerald-600' : upload.status === 'error' ? 'text-red-500' : 'text-zinc-500', pageMode ? 'w-5 h-5' : 'w-4 h-4']" />
           </div>
+
+          <!-- Info -->
+          <div class="flex-1 min-w-0">
+            <p :class="['font-medium text-zinc-800 truncate', pageMode ? 'text-sm mb-1' : 'text-xs']">{{ upload.name }}</p>
+            <div :class="['flex items-center gap-1.5 text-zinc-400', pageMode ? 'text-[10px] flex-wrap' : 'text-[10px]']">
+              <span :class="['px-1 py-0.5 rounded text-[10px] font-medium', upload.status === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-zinc-100 text-zinc-500']">{{ resolveFileLabel(upload) }}</span>
+              <span>{{ formatSize(upload.size) }}</span>
+              <span v-if="upload.uploaded_at">· {{ formatRelativeTime(upload.uploaded_at) }}</span>
+            </div>
+            <p v-if="upload.message && pageMode" class="text-[10px] text-zinc-400 mt-1 truncate">{{ upload.message }}</p>
+          </div>
+
+          <!-- Delete button (pageMode: top-right, non-pageMode: right side) -->
+          <button
+            @click.stop="handleDelete(upload)"
+            :disabled="operationBusy"
+            class="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-100 rounded-lg transition shrink-0"
+            :class="pageMode ? 'absolute top-1.5 right-1.5' : ''"
+          >
+            <Loader2 v-if="deletingUploadId === upload.id" class="w-3.5 h-3.5 animate-spin" />
+            <Trash2 v-else class="w-3.5 h-3.5" />
+          </button>
         </div>
-
-        <template v-if="pageMode">
-          <div v-if="uploads.length" class="upload-list upload-list--page">
-            <div v-for="file in uploads" :key="file.id" class="upload-item upload-item--page-card">
-              <el-checkbox
-                class="upload-item__checkbox"
-                :model-value="selectedUploadIds.includes(file.id)"
-                :disabled="busy || batchDeleting || (!!deletingUploadId && deletingUploadId !== file.id)"
-                @update:model-value="toggleUpload(file, $event)"
-              />
-              <div class="upload-item__body upload-item__body--stacked">
-                <strong class="upload-item__name">{{ file.name }}</strong>
-                <div class="upload-item__type">{{ resolveFileTypeText(file) }}</div>
-                <div class="upload-item__size">{{ (file.size / 1024).toFixed(1) }} KB</div>
-              </div>
-              <div class="upload-item__actions upload-item__actions--floating">
-                <el-button
-                  circle
-                  plain
-                  :icon="Delete"
-                  class="upload-item__delete"
-                  :loading="deletingUploadId === file.id"
-                  :disabled="busy || batchDeleting || (!!deletingUploadId && deletingUploadId !== file.id)"
-                  @click="requestDelete(file)"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="upload-empty-card upload-empty-card--page">
-            <div class="upload-empty-card__icon">
-              <el-icon><Files /></el-icon>
-            </div>
-            <div class="upload-empty-card__copy">
-              <strong>{{ uploadEmptyDescription }}</strong>
-              <span>{{ uploadEmptyHint }}</span>
-            </div>
-          </div>
-        </template>
-
-        <template v-else>
-          <el-scrollbar v-if="uploads.length" :max-height="uploadListHeight">
-            <div class="upload-list">
-              <div v-for="file in uploads" :key="file.id" class="upload-item">
-                <div class="upload-item__body">
-                  <strong>{{ file.name }}</strong>
-                  <div class="upload-item__meta">
-                    {{ (file.size / 1024).toFixed(1) }} KB · {{ file.status || "success" }}
-                  </div>
-                </div>
-                <div class="upload-item__actions">
-                  <el-tag effect="plain" round>{{ file.type || "unknown" }}</el-tag>
-                </div>
-              </div>
-            </div>
-          </el-scrollbar>
-
-          <div v-else class="upload-empty-card">
-            <div class="upload-empty-card__icon">
-              <el-icon><Files /></el-icon>
-            </div>
-            <div class="upload-empty-card__copy">
-              <strong>{{ uploadEmptyDescription }}</strong>
-              <span>{{ uploadEmptyHint }}</span>
-            </div>
-          </div>
-        </template>
-      </section>
-
-      <section class="knowledge-panel">
-        <div class="knowledge-panel__head">
-          <div>
-            <div class="knowledge-panel__title knowledge-panel__title--inline">
-              <el-icon><Cpu /></el-icon>
-              <span>模型与后端</span>
-            </div>
-            <div class="knowledge-panel__subtitle">当前问答模型、向量模型和服务来源。</div>
-          </div>
-        </div>
-
-        <div class="model-card-grid">
-          <article class="model-card">
-            <label>问答模型</label>
-            <strong>{{ modelSettings.chatModel }}</strong>
-            <span>当前负责生成回答的主模型</span>
-          </article>
-          <article class="model-card">
-            <label>Embedding 模型</label>
-            <strong>{{ modelSettings.embeddingModel }}</strong>
-            <span>当前负责向量化与检索的模型</span>
-          </article>
-          <article class="model-card">
-            <label>模型来源</label>
-            <strong>{{ modelSettings.provider }}</strong>
-            <span>当前启用的问答服务来源</span>
-          </article>
-        </div>
-      </section>
+      </div>
     </div>
-  </aside>
+
+    <!-- ===== Model info section ===== -->
+    <div class="px-4 py-3 border-t border-zinc-100 shrink-0">
+      <div class="grid grid-cols-3 gap-2">
+        <div class="bg-zinc-50 rounded-lg px-2.5 py-2">
+          <div class="flex items-center gap-1.5 mb-0.5">
+            <Cpu class="w-3 h-3 text-zinc-400" />
+            <span class="text-[10px] text-zinc-400">问答模型</span>
+          </div>
+          <p class="text-xs font-medium text-zinc-700 truncate">{{ modelSettings.chatModel || '—' }}</p>
+        </div>
+        <div class="bg-zinc-50 rounded-lg px-2.5 py-2">
+          <div class="flex items-center gap-1.5 mb-0.5">
+            <Database class="w-3 h-3 text-zinc-400" />
+            <span class="text-[10px] text-zinc-400">嵌入模型</span>
+          </div>
+          <p class="text-xs font-medium text-zinc-700 truncate">{{ modelSettings.embeddingModel || '—' }}</p>
+        </div>
+        <div class="bg-zinc-50 rounded-lg px-2.5 py-2">
+          <div class="flex items-center gap-1.5 mb-0.5">
+            <Server class="w-3 h-3 text-zinc-400" />
+            <span class="text-[10px] text-zinc-400">模型来源</span>
+          </div>
+          <p class="text-xs font-medium text-zinc-700 truncate">{{ modelSettings.provider || '—' }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
-
-<style scoped>
-.knowledge-dock {
-  height: calc(100vh - 48px);
-  padding: 22px 20px 20px;
-  border-radius: 28px;
-  display: flex;
-  flex-direction: column;
-}
-
-.knowledge-dock--page {
-  width: 100%;
-  height: auto;
-  min-height: 0;
-  padding: 22px;
-}
-
-.knowledge-dock__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.knowledge-stage {
-  display: grid;
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.knowledge-panel {
-  display: grid;
-  gap: 14px;
-  padding: 18px;
-  border-radius: 22px;
-  border: 1px solid rgba(31, 74, 160, 0.08);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 250, 255, 0.94));
-  box-shadow: 0 12px 30px rgba(31, 64, 128, 0.04);
-}
-
-.knowledge-panel__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.knowledge-panel__head--library {
-  align-items: center;
-}
-
-.knowledge-panel__title {
-  font-size: 1rem;
-  font-weight: 800;
-  color: var(--ink);
-}
-
-.knowledge-panel__title--inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.knowledge-panel__subtitle {
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1.6;
-}
-
-.knowledge-panel__meta,
-.knowledge-dock__bulk-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.knowledge-panel__meta--library {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.knowledge-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: rgba(46, 108, 246, 0.12);
-  color: var(--accent);
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-
-.knowledge-pill--soft {
-  background: rgba(31, 74, 160, 0.06);
-  color: var(--muted);
-}
-
-.knowledge-upload-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.85fr);
-  gap: 14px;
-}
-
-.knowledge-upload-grid--single {
-  grid-template-columns: 1fr;
-}
-
-.knowledge-upload-main,
-.knowledge-upload-side,
-.knowledge-side-card {
-  display: grid;
-  gap: 12px;
-}
-
-.knowledge-dock__upload {
-  margin: 0;
-}
-
-.knowledge-dock__upload :deep(.el-upload) {
-  display: block;
-}
-
-.knowledge-dock__upload :deep(.el-upload-dragger) {
-  min-height: 220px;
-  border-radius: 22px;
-  border: 1px dashed rgba(46, 108, 246, 0.18);
-  background:
-    radial-gradient(circle at top, rgba(105, 154, 255, 0.16), transparent 42%),
-    linear-gradient(180deg, rgba(249, 252, 255, 0.98), rgba(241, 247, 255, 0.92));
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.knowledge-dock__upload :deep(.el-upload-dragger:hover) {
-  transform: translateY(-1px);
-  border-color: rgba(46, 108, 246, 0.32);
-  box-shadow: 0 12px 30px rgba(46, 108, 246, 0.08);
-}
-
-.knowledge-dock__upload-icon {
-  font-size: 38px;
-  color: var(--accent);
-}
-
-.knowledge-dock__upload-title {
-  margin-top: 12px;
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--ink);
-}
-
-.knowledge-dock__upload-subtitle {
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 0.86rem;
-}
-
-.knowledge-upload-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.knowledge-upload-caption {
-  display: grid;
-  gap: 4px;
-}
-
-.knowledge-upload-caption strong {
-  font-size: 0.94rem;
-  color: var(--ink);
-}
-
-.knowledge-upload-caption span {
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.knowledge-dock__import {
-  height: 42px;
-  min-width: 148px;
-  border: none;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #1d4dcc, #326cf2);
-}
-
-.knowledge-side-card {
-  height: 100%;
-  padding: 16px;
-  border-radius: 20px;
-  border: 1px solid rgba(31, 74, 160, 0.08);
-  background: rgba(244, 248, 255, 0.92);
-}
-
-.knowledge-side-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.knowledge-side-card__head strong {
-  font-size: 0.94rem;
-  color: var(--ink);
-}
-
-.knowledge-side-card__head span {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.knowledge-rule-list {
-  display: grid;
-  gap: 12px;
-}
-
-.knowledge-rule-item {
-  display: grid;
-  gap: 4px;
-  padding: 12px 0;
-  border-bottom: 1px solid rgba(31, 74, 160, 0.08);
-}
-
-.knowledge-rule-item:last-child {
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.knowledge-rule-item strong {
-  font-size: 0.88rem;
-  color: var(--ink);
-}
-
-.knowledge-rule-item span {
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.6;
-}
-
-.knowledge-library-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.knowledge-library-toolbar__search {
-  flex: 1;
-}
-
-.upload-list {
-  display: grid;
-  gap: 10px;
-}
-
-.upload-list--page {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.upload-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
-  min-height: 92px;
-  border-radius: 18px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 8px 20px rgba(31, 64, 128, 0.04);
-}
-
-.upload-item--page-card {
-  position: relative;
-  min-height: 152px;
-  height: 152px;
-  padding: 16px;
-  border-color: rgba(31, 74, 160, 0.06);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 255, 0.94));
-  box-shadow: 0 10px 24px rgba(31, 64, 128, 0.035);
-}
-
-.upload-item__checkbox {
-  flex: none;
-  margin-top: 3px;
-}
-
-.upload-item--page-card .upload-item__checkbox {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  margin-top: 0;
-  z-index: 1;
-}
-
-.upload-item__body {
-  min-width: 0;
-  flex: 1;
-}
-
-.upload-item__body strong {
-  display: block;
-  word-break: break-word;
-  line-height: 1.55;
-}
-
-.upload-item__body--stacked {
-  display: grid;
-  grid-template-rows: auto auto auto;
-  align-content: start;
-  gap: 10px;
-  width: 100%;
-  height: 100%;
-  padding: 6px 44px 0 34px;
-}
-
-.upload-item__name {
-  font-size: 0.96rem;
-  font-weight: 800;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-height: 1.45;
-}
-
-.upload-item__meta {
-  color: var(--muted);
-  font-size: 0.82rem;
-  margin-top: 6px;
-}
-
-.upload-item__type,
-.upload-item__size {
-  color: var(--muted);
-  font-size: 0.84rem;
-  line-height: 1.5;
-}
-
-.upload-item__type {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  max-width: 100%;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(34, 197, 94, 0.18);
-  background: rgba(34, 197, 94, 0.12);
-  color: #167c3a;
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-
-.upload-item__actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.upload-item__actions--floating {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-}
-
-.upload-item__delete {
-  border-color: rgba(46, 108, 246, 0.12);
-  color: var(--accent);
-  background: rgba(255, 255, 255, 0.86);
-}
-
-.upload-empty-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 104px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  border: 1px dashed rgba(46, 108, 246, 0.18);
-  background: linear-gradient(180deg, rgba(247, 250, 255, 0.94), rgba(242, 247, 255, 0.88));
-}
-
-.upload-empty-card--page {
-  min-height: 128px;
-}
-
-.upload-empty-card__icon {
-  width: 38px;
-  height: 38px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 12px;
-  background: rgba(46, 108, 246, 0.1);
-  color: var(--accent);
-  font-size: 18px;
-}
-
-.upload-empty-card__copy {
-  display: grid;
-  gap: 4px;
-}
-
-.upload-empty-card__copy strong {
-  font-size: 0.94rem;
-  color: var(--ink);
-}
-
-.upload-empty-card__copy span {
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.55;
-}
-
-.upload-queue {
-  display: grid;
-  gap: 10px;
-}
-
-.upload-task {
-  padding: 12px 14px;
-  border-radius: 16px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.upload-task__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.upload-task__head strong {
-  min-width: 0;
-  word-break: break-word;
-}
-
-.upload-task__meta {
-  margin: 8px 0 12px;
-  color: var(--muted);
-  font-size: 0.83rem;
-  line-height: 1.6;
-}
-
-.model-card-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.model-card {
-  display: grid;
-  gap: 6px;
-  min-height: 112px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid rgba(31, 74, 160, 0.08);
-  background:
-    linear-gradient(180deg, rgba(244, 248, 255, 0.98), rgba(237, 243, 255, 0.92));
-  box-shadow: 0 8px 18px rgba(31, 64, 128, 0.05);
-}
-
-.model-card label {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.model-card strong {
-  font-size: 0.96rem;
-  line-height: 1.45;
-  color: var(--ink);
-  word-break: break-word;
-}
-
-.model-card span {
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-
-@media (max-width: 960px) {
-  .knowledge-dock {
-    height: auto;
-  }
-
-  .knowledge-dock--page {
-    min-height: auto;
-  }
-
-  .knowledge-panel__head,
-  .knowledge-panel__head--library,
-  .knowledge-library-toolbar,
-  .knowledge-upload-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .knowledge-upload-grid,
-  .upload-list--page,
-  .model-card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .knowledge-dock__bulk-actions {
-    width: 100%;
-    justify-content: space-between;
-  }
-}
-</style>

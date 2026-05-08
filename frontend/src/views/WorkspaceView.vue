@@ -1,7 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
 
 import ActionBusyOverlay from "@/components/ActionBusyOverlay.vue";
 import ChatWorkspace from "@/components/ChatWorkspace.vue";
@@ -26,9 +25,7 @@ const route = useRoute();
 const router = useRouter();
 const user = ref(getCurrentUser());
 const preferences = ref(getPreferences(user.value));
-const workspace = reactive({
-  sessions: [],
-});
+const sessions = ref([]);
 const activeSessionId = ref("");
 const sessionSearch = ref("");
 const prompt = ref("");
@@ -38,10 +35,11 @@ const activeAnswerController = ref(null);
 const activeAnswerRequestId = ref("");
 const activeAnswerPrompt = ref("");
 const activeAnswerExpectedMessageCount = ref(0);
-const pageLoading = ref(false);
 const deletingSessionId = ref("");
 const welcomeMessage = ref("你好，我已经准备好结合知识库回答问题了。");
 const startupError = ref("");
+const pageLoading = ref(false);
+
 const sidebarBusy = computed(() => isAnswering.value || !!deletingSessionId.value);
 const deleteBusyState = computed(() => ({
   visible: !!deletingSessionId.value,
@@ -50,35 +48,24 @@ const deleteBusyState = computed(() => ({
   description: "会话记录正在清理并刷新工作区，请等待当前操作完成。",
 }));
 const navItems = computed(() => buildSidebarNavItems(user.value));
-const dashboardGridStyle = computed(() => ({
-  "--dashboard-sidebar-width": preferences.value.sidebarCollapsed ? "88px" : "320px",
-}));
 
 const filteredSessions = computed(() => {
   const keyword = sessionSearch.value.trim().toLowerCase();
-  return [...workspace.sessions]
-    .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))
-    .filter((session) => {
-      if (!keyword) {
-        return true;
-      }
-      const haystack = `${session.title} ${session.preview || ""}`.toLowerCase();
-      return haystack.includes(keyword);
-    });
+  return sessions.value
+    .filter((s) => {
+      if (!keyword) return true;
+      return `${s.title} ${s.preview || ""}`.toLowerCase().includes(keyword);
+    })
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 });
 
 const activeSession = computed(() => {
-  return (
-    workspace.sessions.find((session) => session.id === activeSessionId.value) || {
-      id: "",
-      title: "新对话",
-      preview: "还没有消息",
-      messageCount: 0,
-      updatedAt: new Date().toISOString(),
-      messages: [],
-      welcomeMessage: welcomeMessage.value,
-    }
-  );
+  const found = sessions.value.find((s) => s.id === activeSessionId.value);
+  return found || {
+    id: "", title: "新对话", preview: "还没有消息",
+    messageCount: 0, updatedAt: new Date().toISOString(),
+    messages: [], welcomeMessage: welcomeMessage.value,
+  };
 });
 
 const modelSettings = reactive({
@@ -90,28 +77,19 @@ const modelSettings = reactive({
 });
 
 const selectedChatModel = computed(() => {
-  return (
-    modelSettings.chatModels.find((item) => item.id === preferences.value.chatModelId) ||
-    modelSettings.chatModels[0] ||
-    null
-  );
+  return modelSettings.chatModels.find((m) => m.id === preferences.value.chatModelId) || modelSettings.chatModels[0] || null;
 });
+
 const currentProviderLabel = computed(() => {
   return selectedChatModel.value?.provider_label || modelSettings.provider;
 });
 
 function mergeSession(sessionPayload) {
-  const session = {
-    ...normalizeShellSession(sessionPayload),
-    welcomeMessage: buildWelcomeMessage(sessionPayload),
-  };
-  const existingIndex = workspace.sessions.findIndex((item) => item.id === session.id);
-  if (existingIndex >= 0) {
-    workspace.sessions.splice(existingIndex, 1, session);
-  } else {
-    workspace.sessions.unshift(session);
-  }
-  workspace.sessions.sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt));
+  const session = { ...normalizeShellSession(sessionPayload), welcomeMessage: buildWelcomeMessage(sessionPayload) };
+  const idx = sessions.value.findIndex((s) => s.id === session.id);
+  if (idx >= 0) sessions.value.splice(idx, 1, session);
+  else sessions.value.unshift(session);
+  sessions.value.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   return session;
 }
 
@@ -122,161 +100,94 @@ async function loadSession(sessionId) {
   welcomeMessage.value = merged.welcomeMessage;
 }
 
-function wait(milliseconds) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, milliseconds);
-  });
-}
+function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function syncStoppedSession(sessionId, expectedPrompt, expectedMessageCount) {
-  const retryDelays = [120, 280, 520, 900];
-
-  for (const delay of retryDelays) {
+  for (const delay of [120, 280, 520, 900]) {
     await wait(delay);
     const detail = await fetchSessionDetail(sessionId);
-    const messages = Array.isArray(detail?.messages) ? detail.messages : [];
-    const hasExpectedPrompt = messages.some((message, index) => {
-      return (
-        message?.role === "user" &&
-        String(message.content || "").trim() === expectedPrompt &&
-        index >= Math.max(0, messages.length - 3)
-      );
-    });
-
-    if (messages.length >= expectedMessageCount && hasExpectedPrompt) {
+    const msgs = Array.isArray(detail?.messages) ? detail.messages : [];
+    const hasPrompt = msgs.some((m, i) => m?.role === "user" && String(m.content || "").trim() === expectedPrompt && i >= Math.max(0, msgs.length - 3));
+    if (msgs.length >= expectedMessageCount && hasPrompt) {
       const merged = mergeSession(detail);
       activeSessionId.value = merged.id;
       welcomeMessage.value = merged.welcomeMessage;
       return;
     }
   }
-
   await loadSession(sessionId);
 }
 
 async function refreshSessions(preferredSessionId = "") {
-  const sessionList = await fetchSessions();
-  workspace.sessions.splice(
-    0,
-    workspace.sessions.length,
-    ...sessionList.map((session) => {
-      const normalized = normalizeShellSession(session);
-      return {
-        ...normalized,
-        welcomeMessage: buildWelcomeMessage(session),
-      };
-    }),
-  );
-
-  if (!workspace.sessions.length) {
-    await createNewSession();
-    return;
-  }
-
-  const nextSessionId =
-    workspace.sessions.find((item) => item.id === preferredSessionId)?.id ||
-    workspace.sessions.find((item) => item.id === activeSessionId.value)?.id ||
-    workspace.sessions[0].id;
-  await loadSession(nextSessionId);
+  const list = await fetchSessions();
+  sessions.value = list.map((s) => ({ ...normalizeShellSession(s), welcomeMessage: buildWelcomeMessage(s) }));
+  if (!sessions.value.length) { await createNewSession(); return; }
+  const nextId = sessions.value.find((s) => s.id === preferredSessionId)?.id || sessions.value.find((s) => s.id === activeSessionId.value)?.id || sessions.value[0].id;
+  await loadSession(nextId);
 }
 
 async function createNewSession({ ignoreBusy = false } = {}) {
-  if (!ignoreBusy && sidebarBusy.value) {
-    return;
-  }
+  if (!ignoreBusy && sidebarBusy.value) return;
   const session = await createSession();
   const merged = mergeSession(session);
   activeSessionId.value = merged.id;
   welcomeMessage.value = merged.welcomeMessage;
   prompt.value = "";
+  // Navigate to workspace to ensure fresh chat view
+  router.push(buildRouteLocation("workspace", merged.id));
 }
 
 async function selectSession(sessionId) {
-  if (sidebarBusy.value) {
-    return;
-  }
+  if (sidebarBusy.value) return;
   await loadSession(sessionId);
 }
 
 async function submitPrompt(rawPrompt) {
   const content = (rawPrompt || "").trim();
-  if (!content || isAnswering.value || !activeSession.value) {
-    return;
-  }
+  if (!content || isAnswering.value) return;
+  if (!activeSession.value.id) await createNewSession();
 
-  if (!activeSession.value.id) {
-    await createNewSession();
-  }
-
-  const optimisticSession = activeSession.value;
-  const serverMessageCountBeforeSubmit = optimisticSession.messages.length;
-  optimisticSession.messages = [
-    ...optimisticSession.messages,
-    {
-      id: `local-user-${Date.now()}`,
-      role: "user",
-      content,
-    },
-  ];
-  optimisticSession.messageCount = optimisticSession.messages.length;
-  const assistantMessageId = `local-assistant-${Date.now()}`;
-  let assistantStarted = false;
-  const answerRequestId = `${activeSession.value.id}-${Date.now()}`;
-  const answerController = new AbortController();
-  activeAnswerRequestId.value = answerRequestId;
-  activeAnswerController.value = answerController;
+  const opt = activeSession.value;
+  const serverCount = opt.messages.length;
+  opt.messages = [...opt.messages, { id: `local-user-${Date.now()}`, role: "user", content }];
+  opt.messageCount = opt.messages.length;
+  const aid = `local-assistant-${Date.now()}`;
+  let started = false;
+  const reqId = `${activeSession.value.id}-${Date.now()}`;
+  const ctrl = new AbortController();
+  activeAnswerRequestId.value = reqId;
+  activeAnswerController.value = ctrl;
   activeAnswerPrompt.value = content;
-  activeAnswerExpectedMessageCount.value = serverMessageCountBeforeSubmit + 2;
+  activeAnswerExpectedMessageCount.value = serverCount + 2;
   isStoppingAnswer.value = false;
   prompt.value = "";
   isAnswering.value = true;
 
   try {
-    const updatedSession = await sendPromptStream(activeSession.value.id, content, {
+    const updated = await sendPromptStream(activeSession.value.id, content, {
       answerMode: preferences.value.answerMode,
       chatModelId: preferences.value.chatModelId || modelSettings.defaultChatModelId,
-      answerRequestId,
-      signal: answerController.signal,
+      answerRequestId: reqId,
+      signal: ctrl.signal,
       onDelta(delta) {
-        if (!assistantStarted) {
-          optimisticSession.messages = [
-            ...optimisticSession.messages,
-            {
-              id: assistantMessageId,
-              role: "assistant",
-              content: "",
-            },
-          ];
-          assistantStarted = true;
-        }
-
-        const assistantMessage = optimisticSession.messages.find(
-          (message) => message.id === assistantMessageId,
-        );
-        if (assistantMessage) {
-          assistantMessage.content += delta;
-          optimisticSession.messageCount = optimisticSession.messages.length;
-        }
+        if (!started) { opt.messages = [...opt.messages, { id: aid, role: "assistant", content: "" }]; started = true; }
+        const msg = opt.messages.find((m) => m.id === aid);
+        if (msg) { msg.content += delta; opt.messageCount = opt.messages.length; }
       },
     });
-    mergeSession(updatedSession);
-  } catch (error) {
-    if (error.name === "AbortError") {
+    mergeSession(updated);
+  } catch (err) {
+    if (err.name === "AbortError") {
       if (isStoppingAnswer.value) {
-        await syncStoppedSession(
-          activeSession.value.id,
-          activeAnswerPrompt.value,
-          activeAnswerExpectedMessageCount.value,
-        );
+        await syncStoppedSession(activeSession.value.id, activeAnswerPrompt.value, activeAnswerExpectedMessageCount.value);
       } else {
         await loadSession(activeSession.value.id);
       }
       return;
     }
     await loadSession(activeSession.value.id);
-    ElMessage.error(error.message || "回答失败了，请稍后重试。");
   } finally {
-    if (activeAnswerRequestId.value === answerRequestId) {
+    if (activeAnswerRequestId.value === reqId) {
       activeAnswerRequestId.value = "";
       activeAnswerController.value = null;
       activeAnswerPrompt.value = "";
@@ -288,59 +199,24 @@ async function submitPrompt(rawPrompt) {
 }
 
 async function stopCurrentAnswer() {
-  if (!isAnswering.value || isStoppingAnswer.value || !activeSession.value?.id) {
-    return;
-  }
-
-  const answerRequestId = activeAnswerRequestId.value;
+  if (!isAnswering.value || isStoppingAnswer.value || !activeSession.value?.id) return;
   isStoppingAnswer.value = true;
   try {
-    const result = await stopPromptStream(activeSession.value.id, answerRequestId);
+    await stopPromptStream(activeSession.value.id, activeAnswerRequestId.value);
     activeAnswerController.value?.abort();
-    if (result.stopped) {
-      ElMessage.success("已停止回答");
-    }
-  } catch (error) {
-    ElMessage.warning(error.message || "停止请求没有发送成功，已尝试中断本地连接。");
+  } catch {
     activeAnswerController.value?.abort();
   }
 }
 
-function updateAnswerMode(answerMode) {
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      answerMode,
-    },
-    user.value,
-  );
-}
-
-function updateChatModel(chatModelId) {
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      chatModelId,
-    },
-    user.value,
-  );
-}
+function updateAnswerMode(mode) { preferences.value = savePreferences({ ...preferences.value, answerMode: mode }, user.value); }
+function updateChatModel(id) { preferences.value = savePreferences({ ...preferences.value, chatModelId: id }, user.value); }
 
 function syncChatModelPreference() {
-  const modelIds = modelSettings.chatModels.map((item) => item.id);
-  const fallbackModelId = modelSettings.defaultChatModelId || modelIds[0] || "";
-  const preferredModelId = preferences.value.chatModelId;
-  if (!fallbackModelId || modelIds.includes(preferredModelId)) {
-    return;
-  }
-
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      chatModelId: fallbackModelId,
-    },
-    user.value,
-  );
+  const ids = modelSettings.chatModels.map((m) => m.id);
+  const fallback = modelSettings.defaultChatModelId || ids[0] || "";
+  if (!fallback || ids.includes(preferences.value.chatModelId)) return;
+  preferences.value = savePreferences({ ...preferences.value, chatModelId: fallback }, user.value);
 }
 
 async function handleLogout() {
@@ -349,67 +225,33 @@ async function handleLogout() {
 }
 
 async function handleDeleteSession(sessionId) {
-  if (!sessionId || sidebarBusy.value) {
-    return;
-  }
-
+  if (!sessionId || sidebarBusy.value) return;
   deletingSessionId.value = sessionId;
   try {
     const result = await deleteSession(sessionId);
-    const deletedActiveSession = activeSessionId.value === sessionId;
-    const remainingSessions = workspace.sessions.filter((session) => session.id !== sessionId);
-    workspace.sessions.splice(0, workspace.sessions.length, ...remainingSessions);
-
-    if (deletedActiveSession) {
+    const wasActive = activeSessionId.value === sessionId;
+    sessions.value = sessions.value.filter((s) => s.id !== sessionId);
+    if (wasActive) {
       activeSessionId.value = "";
-      const nextSessionId = result.next_session_id || remainingSessions[0]?.id || "";
-      if (nextSessionId) {
-        await loadSession(nextSessionId);
-      } else {
-        await createNewSession({ ignoreBusy: true });
-      }
+      const nextId = result.next_session_id || sessions.value[0]?.id || "";
+      if (nextId) await loadSession(nextId);
+      else await createNewSession({ ignoreBusy: true });
     }
-
-    ElMessage.success(result.message || "会话已删除");
-  } catch (error) {
-    ElMessage.error(error.message || "删除会话失败，请稍后重试。");
   } finally {
     deletingSessionId.value = "";
   }
 }
 
-function navigateTo(name) {
-  router.push(buildRouteLocation(name, activeSessionId.value));
-}
-
-function openKnowledgePage() {
-  navigateTo("knowledge");
-}
-
+function navigateTo(name) { router.push(buildRouteLocation(name, activeSessionId.value)); }
 function toggleSidebarCollapse() {
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      sidebarCollapsed: !preferences.value.sidebarCollapsed,
-    },
-    user.value,
-  );
+  preferences.value = savePreferences({ ...preferences.value, sidebarCollapsed: !preferences.value.sidebarCollapsed }, user.value);
 }
 
-watch(activeSessionId, (sessionId) => {
-  if (route.name !== "workspace") {
-    return;
-  }
-
-  const currentSession = typeof route.query.session === "string" ? route.query.session : "";
-  if ((sessionId || "") === currentSession) {
-    return;
-  }
-
-  router.replace({
-    name: "workspace",
-    query: sessionId ? { session: sessionId } : {},
-  });
+watch(activeSessionId, (id) => {
+  if (route.name !== "workspace") return;
+  const q = typeof route.query.session === "string" ? route.query.session : "";
+  if ((id || "") === q) return;
+  router.replace({ name: "workspace", query: id ? { session: id } : {} });
 });
 
 onMounted(async () => {
@@ -425,18 +267,10 @@ onMounted(async () => {
     modelSettings.chatModels = Array.isArray(meta.chat_models) ? meta.chat_models : [];
     syncChatModelPreference();
     startupError.value = meta.startup_error || "";
-    if (startupError.value) {
-      ElMessage.warning(startupError.value);
-    }
-
-    const preferredSessionId =
-      typeof route.query.session === "string" ? route.query.session : "";
-    await refreshSessions(preferredSessionId);
-  } catch (error) {
-    ElMessage.error(error.message || "加载工作台失败");
-    if (!getCurrentUser()) {
-      router.push("/login");
-    }
+    const preferredId = typeof route.query.session === "string" ? route.query.session : "";
+    await refreshSessions(preferredId);
+  } catch {
+    if (!getCurrentUser()) router.push("/login");
   } finally {
     pageLoading.value = false;
   }
@@ -444,67 +278,69 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-loading="pageLoading" class="page-shell workspace-page">
+  <div class="flex h-screen bg-[#FAFAFA]">
     <ActionBusyOverlay
       :visible="deleteBusyState.visible"
       :badge-text="deleteBusyState.badgeText"
       :title="deleteBusyState.title"
       :description="deleteBusyState.description"
     />
+    <WorkspaceSidebar
+      :user="user"
+      :sessions="filteredSessions"
+      :nav-items="navItems"
+      :current-route-name="String(route.name || '')"
+      :active-session-id="activeSessionId"
+      :search-value="sessionSearch"
+      :busy="sidebarBusy"
+      :deleting-session-id="deletingSessionId"
+      :session-density="preferences.sessionDensity"
+      :collapsed="preferences.sidebarCollapsed"
+      @create-session="createNewSession"
+      @select-session="selectSession"
+      @delete-session="handleDeleteSession"
+      @navigate="navigateTo"
+      @toggle-collapse="toggleSidebarCollapse"
+      @update:search-value="sessionSearch = $event"
+      @logout="handleLogout"
+    />
 
-    <div class="dashboard-grid" :style="dashboardGridStyle">
-      <WorkspaceSidebar
-        :user="user"
-        :sessions="filteredSessions"
-        :nav-items="navItems"
-        :current-route-name="String(route.name || '')"
-        :active-session-id="activeSessionId"
-        :search-value="sessionSearch"
-        :busy="sidebarBusy"
-        :deleting-session-id="deletingSessionId"
-        :session-density="preferences.sessionDensity"
-        :collapsed="preferences.sidebarCollapsed"
-        @create-session="createNewSession"
-        @select-session="selectSession"
-        @delete-session="handleDeleteSession"
-        @navigate="navigateTo"
-        @toggle-collapse="toggleSidebarCollapse"
-        @update:search-value="sessionSearch = $event"
-        @logout="handleLogout"
-      />
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- Top header bar -->
+      <header class="h-12 bg-white border-b border-zinc-100 flex items-center justify-between px-6 shrink-0">
+        <span class="text-sm font-medium text-zinc-700">问答主页</span>
+      </header>
 
-      <ChatWorkspace
-        :session="activeSession"
-        :busy="isAnswering"
-        :prompt="prompt"
-        :provider-label="currentProviderLabel"
-        :suggestions="suggestedPrompts"
-        :welcome-message="activeSession.welcomeMessage"
-        :send-shortcut="preferences.sendShortcut"
-        :show-knowledge-tips="preferences.showKnowledgeTips"
-        :answer-mode="preferences.answerMode"
-        :chat-model-id="preferences.chatModelId"
-        :chat-model-options="modelSettings.chatModels"
-        @update:prompt="prompt = $event"
-        @update:answer-mode="updateAnswerMode"
-        @update:chat-model="updateChatModel"
-        @submit="submitPrompt"
-        @stop="stopCurrentAnswer"
-        @choose-suggestion="submitPrompt"
-        @open-knowledge="openKnowledgePage"
-      />
+      <main class="flex-1 min-h-0">
+        <div v-if="pageLoading" class="flex items-center justify-center h-full">
+          <div class="flex gap-1.5">
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 300ms" />
+          </div>
+        </div>
+        <ChatWorkspace
+          v-else
+          :session="activeSession"
+          :busy="isAnswering"
+          :prompt="prompt"
+          :provider-label="currentProviderLabel"
+          :suggestions="suggestedPrompts"
+          :welcome-message="activeSession.welcomeMessage"
+          :send-shortcut="preferences.sendShortcut"
+          :show-knowledge-tips="preferences.showKnowledgeTips"
+          :answer-mode="preferences.answerMode"
+          :chat-model-id="preferences.chatModelId"
+          :chat-model-options="modelSettings.chatModels"
+          @update:prompt="prompt = $event"
+          @update:answer-mode="updateAnswerMode"
+          @update:chat-model="updateChatModel"
+          @submit="submitPrompt"
+          @stop="stopCurrentAnswer"
+          @choose-suggestion="submitPrompt"
+          @open-knowledge="() => navigateTo('knowledge')"
+        />
+      </main>
     </div>
   </div>
 </template>
-
-<style scoped>
-.workspace-page {
-  overflow: hidden;
-}
-
-@media (max-width: 1080px) {
-  .workspace-page {
-    overflow: auto;
-  }
-}
-</style>

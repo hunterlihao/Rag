@@ -1,8 +1,7 @@
 <script setup>
-import { computed, h, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
-import { ArrowLeft, CollectionTag, Files } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ArrowLeft, Files, Upload, Loader2, AlertCircle } from "lucide-vue-next";
 
 import ActionBusyOverlay from "@/components/ActionBusyOverlay.vue";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
@@ -13,27 +12,15 @@ import { appConfig } from "@/services/config";
 import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from "@/services/shell";
 import { getPreferences, savePreferences } from "@/services/user";
 import {
-  createSession,
-  deleteSession,
-  deleteUpload,
-  deleteUploads,
-  fetchBackendMeta,
-  fetchSessions,
-  fetchUploads,
-  formatRelativeTime,
-  uploadFileWithProgress,
+  createSession, deleteSession, deleteUpload, deleteUploads,
+  fetchBackendMeta, fetchSessions, fetchUploads, formatRelativeTime, uploadFileWithProgress,
 } from "@/services/workspace";
 
 const route = useRoute();
 const router = useRouter();
 const user = ref(getCurrentUser());
 const preferences = ref(getPreferences(user.value));
-
-const workspace = reactive({
-  sessions: [],
-  uploads: [],
-});
-
+const workspace = reactive({ sessions: [], uploads: [] });
 const activeSessionId = ref("");
 const sessionSearch = ref("");
 const uploadSearch = ref("");
@@ -46,11 +33,33 @@ const startupError = ref("");
 const uploadTasks = ref([]);
 const selectedUploadIds = ref([]);
 const deleteDialogVisible = ref(false);
-const deleteDialogState = ref(createDeleteDialogState());
+const deleteDialogState = ref({ tone: "danger", title: "", summary: "", hint: "", items: [], extra: "", confirmText: "确认删除", onConfirm: null });
+
+const sidebarBusy = computed(() => importBusy.value || batchDeleting.value || !!deletingUploadId.value || !!deletingSessionId.value);
 const navItems = computed(() => buildSidebarNavItems(user.value));
-const dashboardGridStyle = computed(() => ({
-  "--dashboard-sidebar-width": preferences.value.sidebarCollapsed ? "88px" : "320px",
-}));
+const pageBusy = computed(() => importBusy.value || batchDeleting.value || !!deletingUploadId.value || !!deletingSessionId.value);
+
+const filteredSessions = computed(() => {
+  const kw = sessionSearch.value.trim().toLowerCase();
+  return [...workspace.sessions]
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .filter((s) => !kw || `${s.title} ${s.preview || ""}`.toLowerCase().includes(kw));
+});
+
+const filteredUploads = computed(() => {
+  const kw = uploadSearch.value.trim().toLowerCase();
+  if (!kw) return [...workspace.uploads];
+  return workspace.uploads.filter((u) =>
+    (u.name || "").toLowerCase().includes(kw) ||
+    (u.type || "").toLowerCase().includes(kw)
+  );
+});
+
+const allUploadsSelected = computed(() =>
+  filteredUploads.value.length > 0 && filteredUploads.value.every((u) => selectedUploadIds.value.includes(u.id))
+);
+
+const selectedUploadCount = computed(() => selectedUploadIds.value.length);
 
 const modelSettings = reactive({
   provider: appConfig.modelProvider,
@@ -58,166 +67,60 @@ const modelSettings = reactive({
   embeddingModel: appConfig.embeddingModel,
 });
 
-const filteredSessions = computed(() => {
-  const keyword = sessionSearch.value.trim().toLowerCase();
-  return [...workspace.sessions]
-    .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))
-    .filter((session) => {
-      if (!keyword) {
-        return true;
-      }
-
-      const haystack = `${session.title} ${session.preview || ""}`.toLowerCase();
-      return haystack.includes(keyword);
-    });
-});
-
 const latestUploadText = computed(() => {
-  if (!workspace.uploads.length) {
-    return "还没有导入任何文件";
-  }
-
-  return `最近导入：${formatRelativeTime(workspace.uploads[0].uploadedAt)}`;
+  if (!workspace.uploads.length) return "还没有导入任何文件";
+  const latest = [...workspace.uploads].sort((a, b) => new Date(b.uploaded_at || 0) - new Date(a.uploaded_at || 0))[0];
+  return `最近导入：${formatRelativeTime(latest.uploaded_at)}`;
 });
 
-const filteredUploads = computed(() => {
-  const keyword = uploadSearch.value.trim().toLowerCase();
-  if (!keyword) {
-    return workspace.uploads;
-  }
-
-  return workspace.uploads.filter((upload) => String(upload.name || "").toLowerCase().includes(keyword));
-});
-const importOverlayText = computed(() => {
-  if (!uploadTasks.value.length) {
-    return "知识库导入中，请稍候...";
-  }
-  return `正在导入 ${uploadTasks.value.length} 个文件，请等待处理完成...`;
-});
 const busyOverlayState = computed(() => {
-  if (importBusy.value) {
-    return {
-      visible: true,
-      badgeText: "导入处理中",
-      title: "正在导入知识库",
-      description: importOverlayText.value,
-    };
-  }
-
-  if (batchDeleting.value) {
-    return {
-      visible: true,
-      badgeText: "删除处理中",
-      title: "正在批量删除文件",
-      description: "选中的知识库文件和对应向量内容正在同步清理，请等待完成。",
-    };
-  }
-
-  if (deletingUploadId.value) {
-    return {
-      visible: true,
-      badgeText: "删除处理中",
-      title: "正在删除知识库文件",
-      description: "文件记录和对应向量内容正在同步移除，请等待当前操作完成。",
-    };
-  }
-
-  return {
-    visible: !!deletingSessionId.value,
-    badgeText: "删除处理中",
-    title: "正在删除会话",
-    description: "会话记录正在清理并刷新知识库页面关联状态，请稍候。",
-  };
+  if (importBusy.value) return { visible: true, badgeText: "导入中", title: "正在导入文件", description: "文件正在上传并写入向量库，请等待完成。" };
+  if (batchDeleting.value) return { visible: true, badgeText: "删除中", title: "正在批量删除", description: "知识库文件正在移除，请等待完成。" };
+  if (deletingUploadId.value) return { visible: true, badgeText: "删除中", title: "正在删除文件", description: "文件正在从向量库中移除。" };
+  if (deletingSessionId.value) return { visible: true, badgeText: "删除处理中", title: "正在删除会话", description: "会话记录正在清理。" };
+  return { visible: false, badgeText: "", title: "", description: "" };
 });
 
 function normalizeUpload(upload) {
   return {
-    id: upload.id,
-    name: upload.name,
-    type: upload.type,
-    size: upload.size,
-    status: upload.status,
-    message: upload.message,
-    duplicate: Boolean(upload.duplicate),
-    uploadedAt: upload.uploaded_at || upload.uploadedAt || new Date().toISOString(),
-    uploaderName: upload.uploader_name || upload.uploaderName || user.value?.name || "",
+    ...upload,
+    name: upload.name || upload.filename || "未命名文件",
+    type: upload.type || upload.content_type || "unknown",
+    size: upload.size ?? upload.size_bytes ?? 0,
+    uploaded_at: upload.uploaded_at || upload.created_at || upload.createdAt,
   };
 }
 
-const allUploadsSelected = computed(() => {
-  return (
-    filteredUploads.value.length > 0 &&
-    filteredUploads.value.every((upload) => selectedUploadIds.value.includes(upload.id))
-  );
-});
-
-const selectedUploadCount = computed(() => selectedUploadIds.value.length);
-const pageBusy = computed(
-  () =>
-    importBusy.value ||
-    batchDeleting.value ||
-    !!deletingUploadId.value ||
-    !!deletingSessionId.value,
-);
-
-function createDeleteDialogState() {
-  return {
-    title: "",
-    summary: "",
-    hint: "",
-    items: [],
-    extra: "",
-    confirmText: "确认删除",
-    action: null,
-  };
-}
-
-function openDeleteDialog(payload) {
-  deleteDialogState.value = {
-    ...createDeleteDialogState(),
-    ...payload,
-  };
-  deleteDialogVisible.value = true;
-}
-
-async function refreshSessions(preferredSessionId = "") {
-  const sessionList = await fetchSessions();
-  workspace.sessions.splice(
-    0,
-    workspace.sessions.length,
-    ...sessionList.map((session) => normalizeShellSession(session)),
-  );
-
-  const nextSessionId =
-    workspace.sessions.find((item) => item.id === preferredSessionId)?.id ||
-    workspace.sessions.find((item) => item.id === activeSessionId.value)?.id ||
-    workspace.sessions[0]?.id ||
-    "";
-  activeSessionId.value = nextSessionId;
+async function refreshSessions(preferredId = "") {
+  const list = await fetchSessions();
+  workspace.sessions = list.map((s) => ({ ...normalizeShellSession(s), welcomeMessage: "" }));
+  if (!workspace.sessions.length) return;
+  const nextId = workspace.sessions.find((s) => s.id === preferredId)?.id || workspace.sessions.find((s) => s.id === activeSessionId.value)?.id || workspace.sessions[0].id;
+  activeSessionId.value = nextId;
 }
 
 async function refreshUploads() {
-  const uploads = await fetchUploads();
-  workspace.uploads.splice(0, workspace.uploads.length, ...uploads.map((item) => normalizeUpload(item)));
-  const availableIds = new Set(workspace.uploads.map((item) => item.id));
-  selectedUploadIds.value = selectedUploadIds.value.filter((uploadId) => availableIds.has(uploadId));
+  const list = await fetchUploads();
+  workspace.uploads = list.map(normalizeUpload);
+  selectedUploadIds.value = selectedUploadIds.value.filter((id) => workspace.uploads.some((u) => u.id === id));
 }
 
-function openWorkspace(sessionId = activeSessionId.value) {
-  if (pageBusy.value) {
-    ElMessage.warning("知识库操作进行中，请等待当前处理完成后再返回问答。");
-    return;
-  }
-  router.push(buildRouteLocation("workspace", sessionId));
+function openWorkspace(sessionId) {
+  if (pageBusy.value) return;
+  router.push(buildRouteLocation("workspace", sessionId || activeSessionId.value));
 }
 
 async function createNewSession() {
-  if (pageBusy.value) {
-    ElMessage.warning("知识库操作进行中，请先等待当前处理完成。");
-    return;
-  }
+  if (pageBusy.value) return;
   const session = await createSession();
-  openWorkspace(session.id);
+  workspace.sessions.unshift({ ...normalizeShellSession(session), welcomeMessage: "" });
+  activeSessionId.value = session.id;
+  router.push(buildRouteLocation("workspace", session.id));
+}
+
+function navigateTo(name) {
+  if (pageBusy.value && name !== "knowledge") return;
+  router.push(buildRouteLocation(name, activeSessionId.value));
 }
 
 async function handleLogout() {
@@ -226,316 +129,183 @@ async function handleLogout() {
 }
 
 async function handleDeleteSession(sessionId) {
-  if (!sessionId || pageBusy.value) {
-    return;
-  }
-
+  if (!sessionId || sidebarBusy.value) return;
   deletingSessionId.value = sessionId;
   try {
     const result = await deleteSession(sessionId);
-    const deletedActiveSession = activeSessionId.value === sessionId;
-    const remainingSessions = workspace.sessions.filter((session) => session.id !== sessionId);
-    workspace.sessions.splice(0, workspace.sessions.length, ...remainingSessions);
-
-    if (deletedActiveSession) {
-      activeSessionId.value = result.next_session_id || remainingSessions[0]?.id || "";
+    workspace.sessions = workspace.sessions.filter((s) => s.id !== sessionId);
+    if (activeSessionId.value === sessionId) {
+      activeSessionId.value = result.next_session_id || workspace.sessions[0]?.id || "";
     }
-
-    ElMessage.success(result.message || "会话已删除");
-  } catch (error) {
-    ElMessage.error(error.message || "删除会话失败，请稍后重试。");
   } finally {
     deletingSessionId.value = "";
   }
 }
 
-function openSession(sessionId) {
-  if (pageBusy.value) {
-    ElMessage.warning("知识库操作进行中，请等待当前处理完成后再切换页面。");
-    return;
-  }
-  activeSessionId.value = sessionId;
-  openWorkspace(sessionId);
-}
-
-function navigateTo(name) {
-  if (pageBusy.value && name !== "knowledge") {
-    ElMessage.warning("知识库操作进行中，请等待当前处理完成后再切换页面。");
-    return;
-  }
-  router.push(buildRouteLocation(name, activeSessionId.value));
-}
-
 function toggleSidebarCollapse() {
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      sidebarCollapsed: !preferences.value.sidebarCollapsed,
-    },
-    user.value,
-  );
+  preferences.value = savePreferences({ ...preferences.value, sidebarCollapsed: !preferences.value.sidebarCollapsed }, user.value);
 }
 
-async function showDuplicateAlert(duplicateFiles) {
-  await ElMessageBox.alert(
-    h("div", { class: "duplicate-dialog" }, [
-      h("p", "这些文件之前已经导入过当前账号的知识库，本次不会重复写入向量库："),
-      h(
-        "ul",
-        duplicateFiles.map((item) =>
-          h("li", { key: item.id || item.name }, item.name),
-        ),
-      ),
-    ]),
-    "以下文件已导入",
-    {
-      confirmButtonText: "知道了",
-    },
-  );
+function openDeleteDialog(payload) {
+  deleteDialogState.value = {
+    tone: payload.tone || "danger",
+    title: payload.title || "删除确认",
+    summary: payload.summary || "",
+    hint: payload.hint || "",
+    items: payload.items || [],
+    extra: payload.extra || "",
+    confirmText: payload.confirmText || "确认删除",
+    onConfirm: payload.onConfirm || (() => {}),
+  };
+  deleteDialogVisible.value = true;
 }
 
 async function importFiles(fileList) {
-  if (!fileList.length || importBusy.value) {
-    return;
-  }
-
-  uploadTasks.value = fileList.map((file, index) => {
-    const rawFile = file.raw || file;
-    return {
-      id: `upload-task-${Date.now()}-${index}`,
-      name: rawFile.name,
-      size: rawFile.size || 0,
-      progress: 0,
-      status: "waiting",
-      message: "等待上传",
-      rawFile,
-    };
-  });
-
+  const files = Array.from(fileList);
+  if (!files.length) return;
   importBusy.value = true;
-  try {
-    const uploadResults = [];
 
-    let cursor = 0;
-    async function runWorker() {
-      while (cursor < uploadTasks.value.length) {
-        const currentIndex = cursor;
-        cursor += 1;
-        const task = uploadTasks.value[currentIndex];
-        task.status = "uploading";
-        task.message = "正在上传到后端";
+  const tasks = files.map((f, i) => ({
+    id: `task-${Date.now()}-${i}`,
+    name: f.name,
+    filename: f.name,
+    size: f.size,
+    progress: 0,
+    status: "uploading",
+  }));
+  uploadTasks.value = [...uploadTasks.value, ...tasks];
 
-        try {
-          const result = await uploadFileWithProgress(task.rawFile, {
-            onProgress(ratio) {
-              task.progress = Math.max(task.progress, Math.min(92, Math.round(ratio * 90)));
-            },
-          });
+  const concurrency = Math.min(appConfig.uploadConcurrency || 2, files.length);
+  const queue = [...files];
+  const results = [];
 
-          task.status = "processing";
-          task.progress = Math.max(task.progress, 95);
-          task.message = "文件上传完成，正在写入知识库";
-
-          const singleResult = result.results?.[0] || {
-            name: task.name,
-            status: "success",
-            message: "上传成功",
-            duplicate: false,
-          };
-          uploadResults.push(singleResult);
-
-          task.status = singleResult.status || "success";
-          task.progress = 100;
-          task.message = singleResult.message || "处理完成";
-        } catch (error) {
-          task.status = "error";
-          task.progress = 100;
-          task.message = error.message || "上传失败";
-          uploadResults.push({
-            name: task.name,
-            status: "error",
-            message: task.message,
-            duplicate: false,
-          });
-        }
+  async function worker() {
+    while (queue.length) {
+      const file = queue.shift();
+      if (!file) break;
+      const task = tasks.find((t) => t.name === file.name && t.status === "uploading");
+      if (!task) continue;
+      try {
+        await uploadFileWithProgress(file, {
+          onProgress(ratio) {
+            task.progress = Math.round(ratio * 100);
+          },
+        });
+        task.status = "success";
+        task.progress = 100;
+        results.push({ name: file.name, status: "success" });
+      } catch (err) {
+        task.status = "error";
+        results.push({ name: file.name, status: "error", message: err.message });
       }
     }
-
-    const workers = Array.from(
-      { length: Math.min(appConfig.uploadConcurrency, uploadTasks.value.length) },
-      () => runWorker(),
-    );
-    await Promise.all(workers);
-    await refreshUploads();
-
-    const successFiles = uploadResults.filter((item) => item.status === "success");
-    const duplicateFiles = uploadResults.filter((item) => item.duplicate);
-    const errorFiles = uploadResults.filter((item) => item.status === "error");
-
-    if (successFiles.length) {
-      ElMessage.success(`已导入 ${successFiles.length} 个文件到当前账号知识库`);
-    }
-    if (errorFiles.length) {
-      ElMessage.error(`有 ${errorFiles.length} 个文件导入失败，请查看后端日志。`);
-    }
-    if (duplicateFiles.length) {
-      await showDuplicateAlert(duplicateFiles);
-    }
-  } catch (error) {
-    ElMessage.error(error.message || "文件导入失败，请稍后重试。");
-  } finally {
-    importBusy.value = false;
   }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  await refreshUploads();
+
+  const duplicates = results.filter((r) => r.status === "error" && r.message?.includes("已经处理过"));
+  const errors = results.filter((r) => r.status === "error" && !r.message?.includes("已经处理过"));
+  if (duplicates.length) {
+    openDeleteDialog({
+      title: "重复文件提示",
+      tone: "primary",
+      summary: `${duplicates.length} 个文件已经处理过了，已自动跳过。`,
+      hint: duplicates.map((d) => d.name).join("、"),
+      confirmText: "知道了",
+      onConfirm: () => { deleteDialogVisible.value = false; },
+    });
+  } else if (errors.length) {
+    openDeleteDialog({
+      title: "导入失败",
+      summary: `${errors.length} 个文件导入失败`,
+      hint: errors.map((e) => `${e.name}: ${e.message}`).join("；"),
+      confirmText: "知道了",
+      onConfirm: () => { deleteDialogVisible.value = false; },
+    });
+  }
+
+  setTimeout(() => {
+    uploadTasks.value = uploadTasks.value.filter((t) => t.status !== "error");
+    if (uploadTasks.value.every((t) => t.status === "success")) {
+      uploadTasks.value = [];
+    }
+  }, 3000);
+  importBusy.value = false;
 }
 
-async function deleteKnowledgeFile(file) {
-  if (!file?.id || deletingUploadId.value || batchDeleting.value) {
-    return;
-  }
-
+function deleteKnowledgeFile(file) {
   openDeleteDialog({
     title: "删除知识库文件",
-    confirmText: "确认删除",
     summary: `确认删除「${file.name}」吗？`,
-    hint: "该文件写入当前账号知识库的向量内容会一起移除，后续问答将不再检索到相关片段。",
-    items: [file],
-    extra: "删除完成后，如果需要恢复，只能重新上传并重新向量化。",
-    action: {
-      type: "single-upload",
-      file,
+    hint: "文件将从向量库中移除，对应对话引用将无法检索。",
+    items: [{ id: file.id, name: file.name }],
+    extra: "删除后不可恢复。",
+    onConfirm: async () => {
+      deleteDialogVisible.value = false;
+      deletingUploadId.value = file.id;
+      try {
+        await deleteUpload(file.id);
+        await refreshUploads();
+      } finally {
+        deletingUploadId.value = "";
+      }
+    },
+  });
+}
+
+function batchDeleteKnowledgeFiles() {
+  const ids = [...selectedUploadIds.value];
+  if (!ids.length) return;
+  const items = ids.map((id) => {
+    const u = workspace.uploads.find((up) => up.id === id);
+    return { id, name: u?.name || id };
+  }).slice(0, 4);
+  openDeleteDialog({
+    title: "批量删除文件",
+    summary: `确认删除 ${ids.length} 个知识库文件吗？`,
+    items,
+    extra: ids.length > 4 ? `...等共 ${ids.length} 个文件` : "",
+    onConfirm: async () => {
+      deleteDialogVisible.value = false;
+      batchDeleting.value = true;
+      try {
+        await deleteUploads(ids);
+        selectedUploadIds.value = [];
+        await refreshUploads();
+      } finally {
+        batchDeleting.value = false;
+      }
     },
   });
 }
 
 function updateUploadSelection({ id, checked }) {
-  if (!id) {
-    return;
-  }
-
   if (checked) {
-    if (!selectedUploadIds.value.includes(id)) {
-      selectedUploadIds.value = [...selectedUploadIds.value, id];
-    }
-    return;
+    if (!selectedUploadIds.value.includes(id)) selectedUploadIds.value = [...selectedUploadIds.value, id];
+  } else {
+    selectedUploadIds.value = selectedUploadIds.value.filter((x) => x !== id);
   }
-
-  selectedUploadIds.value = selectedUploadIds.value.filter((uploadId) => uploadId !== id);
 }
 
 function toggleSelectAllUploads(checked) {
-  const filteredIds = filteredUploads.value.map((item) => item.id);
-  if (checked) {
-    selectedUploadIds.value = Array.from(new Set([...selectedUploadIds.value, ...filteredIds]));
-    return;
-  }
-
-  selectedUploadIds.value = selectedUploadIds.value.filter((uploadId) => !filteredIds.includes(uploadId));
+  selectedUploadIds.value = checked ? filteredUploads.value.map((u) => u.id) : [];
 }
 
-async function batchDeleteKnowledgeFiles() {
-  if (!selectedUploadIds.value.length || importBusy.value || deletingUploadId.value || batchDeleting.value) {
-    return;
-  }
-
-  const selectedFiles = workspace.uploads.filter((item) => selectedUploadIds.value.includes(item.id));
-  const previewFiles = selectedFiles.slice(0, 4);
-  openDeleteDialog({
-    title: "批量删除知识库文件",
-    confirmText: "批量删除",
-    summary: `确认删除已选中的 ${selectedUploadIds.value.length} 个文件吗？`,
-    hint: "这些文件对应的向量内容会一起清理，后续问答将不再命中相关片段。",
-    items: previewFiles,
-    extra:
-      selectedFiles.length > previewFiles.length
-        ? `另有 ${selectedFiles.length - previewFiles.length} 个文件将一并删除。`
-        : "删除完成后，这些文件关联的向量内容都会一起移除。",
-    action: {
-      type: "batch-upload",
-      ids: [...selectedUploadIds.value],
-    },
-  });
-}
-
-async function confirmDeleteDialog() {
-  const action = deleteDialogState.value.action;
-  if (!action?.type) {
-    return;
-  }
-
-  deleteDialogVisible.value = false;
-
-  if (action.type === "single-upload" && action.file?.id) {
-    deletingUploadId.value = action.file.id;
-    try {
-      const result = await deleteUpload(action.file.id);
-      selectedUploadIds.value = selectedUploadIds.value.filter((uploadId) => uploadId !== action.file.id);
-      workspace.uploads.splice(
-        0,
-        workspace.uploads.length,
-        ...(result.uploads || []).map((item) => normalizeUpload(item)),
-      );
-      ElMessage.success(result.message || "知识库文件已删除");
-    } catch (error) {
-      ElMessage.error(error.message || "删除知识库文件失败，请稍后重试。");
-    } finally {
-      deletingUploadId.value = "";
-    }
-    return;
-  }
-
-  if (action.type === "batch-upload" && action.ids?.length) {
-    batchDeleting.value = true;
-    try {
-      const result = await deleteUploads(action.ids);
-      selectedUploadIds.value = [];
-      workspace.uploads.splice(
-        0,
-        workspace.uploads.length,
-        ...(result.uploads || []).map((item) => normalizeUpload(item)),
-      );
-
-      if (result.failed?.length) {
-        ElMessage.warning(result.message || "部分文件删除失败。");
-        return;
-      }
-      ElMessage.success(result.message || "知识库文件已批量删除");
-    } catch (error) {
-      ElMessage.error(error.message || "批量删除知识库文件失败，请稍后重试。");
-    } finally {
-      batchDeleting.value = false;
-    }
-  }
-}
-
-watch(activeSessionId, (sessionId) => {
-  if (route.name !== "knowledge") {
-    return;
-  }
-
-  const currentSession = typeof route.query.session === "string" ? route.query.session : "";
-  if ((sessionId || "") === currentSession) {
-    return;
-  }
-
-  router.replace({
-    name: "knowledge",
-    query: sessionId ? { session: sessionId } : {},
-  });
+watch(activeSessionId, (id) => {
+  if (route.name !== "knowledge") return;
+  const q = typeof route.query.session === "string" ? route.query.session : "";
+  if ((id || "") === q) return;
+  router.replace({ name: "knowledge", query: id ? { session: id } : {} });
 });
 
-watch(deleteDialogVisible, (value) => {
-  if (!value) {
-    deleteDialogState.value = createDeleteDialogState();
-  }
-});
+watch(deleteDialogVisible, (v) => { if (!v) deleteDialogState.value.onConfirm = null; });
 
-onBeforeRouteLeave(() => {
-  if (!pageBusy.value) {
-    return true;
+onBeforeRouteLeave((to, from, next) => {
+  if (pageBusy.value) {
+    if (!confirm("知识库操作正在进行，确定要离开当前页面吗？")) return next(false);
   }
-
-  ElMessage.warning("知识库操作进行中，请等待当前处理完成后再离开知识库页面。");
-  return false;
+  next();
 });
 
 onMounted(async () => {
@@ -548,18 +318,11 @@ onMounted(async () => {
     modelSettings.chatModel = meta.chat_model || appConfig.chatModel;
     modelSettings.embeddingModel = meta.embedding_model || appConfig.embeddingModel;
     startupError.value = meta.startup_error || "";
-    if (startupError.value) {
-      ElMessage.warning(startupError.value);
-    }
-
-    const preferredSessionId =
-      typeof route.query.session === "string" ? route.query.session : "";
-    await Promise.all([refreshSessions(preferredSessionId), refreshUploads()]);
-  } catch (error) {
-    ElMessage.error(error.message || "知识库页面加载失败。");
-    if (!getCurrentUser()) {
-      router.push("/login");
-    }
+    const preferredId = typeof route.query.session === "string" ? route.query.session : "";
+    await refreshSessions(preferredId);
+    await refreshUploads();
+  } catch {
+    if (!getCurrentUser()) router.push("/login");
   } finally {
     pageLoading.value = false;
   }
@@ -567,161 +330,121 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-loading="pageLoading" class="page-shell knowledge-page">
-    <ActionBusyOverlay
-      :visible="busyOverlayState.visible"
-      :badge-text="busyOverlayState.badgeText"
-      :title="busyOverlayState.title"
-      :description="busyOverlayState.description"
+  <div class="flex h-screen bg-[#FAFAFA]">
+    <ActionBusyOverlay v-bind="busyOverlayState" />
+
+    <WorkspaceSidebar
+      :user="user"
+      :sessions="filteredSessions"
+      :nav-items="navItems"
+      :current-route-name="String(route.name || '')"
+      :active-session-id="activeSessionId"
+      :search-value="sessionSearch"
+      :busy="sidebarBusy"
+      :deleting-session-id="deletingSessionId"
+      :session-density="preferences.sessionDensity"
+      :collapsed="preferences.sidebarCollapsed"
+      @create-session="createNewSession"
+      @select-session="(id) => openWorkspace(id)"
+      @delete-session="handleDeleteSession"
+      @navigate="navigateTo"
+      @toggle-collapse="toggleSidebarCollapse"
+      @update:search-value="sessionSearch = $event"
+      @logout="handleLogout"
     />
 
-    <div class="dashboard-grid" :style="dashboardGridStyle">
-      <WorkspaceSidebar
-        :user="user"
-        :sessions="filteredSessions"
-        :nav-items="navItems"
-        :current-route-name="String(route.name || '')"
-        :active-session-id="activeSessionId"
-        :search-value="sessionSearch"
-        :busy="pageBusy"
-        :deleting-session-id="deletingSessionId"
-        :session-density="preferences.sessionDensity"
-        :collapsed="preferences.sidebarCollapsed"
-        @create-session="createNewSession"
-        @select-session="openSession"
-        @delete-session="handleDeleteSession"
-        @navigate="navigateTo"
-        @toggle-collapse="toggleSidebarCollapse"
-        @update:search-value="sessionSearch = $event"
-        @logout="handleLogout"
-      />
+    <div class="flex-1 flex flex-col min-w-0">
+      <header class="h-12 bg-white border-b border-zinc-100 flex items-center justify-between px-6 shrink-0">
+        <div class="flex items-center gap-2">
+          <button @click="openWorkspace()" class="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-700 transition-colors">
+            <ArrowLeft class="w-4 h-4" /> 返回问答
+          </button>
+          <span class="text-zinc-300">/</span>
+          <span class="text-sm font-medium text-zinc-700">知识库管理</span>
+        </div>
+      </header>
 
-      <section class="dashboard-stage">
-        <header class="dashboard-hero glass-panel knowledge-hero">
-          <div class="dashboard-copy knowledge-hero__copy">
-            <div class="dashboard-eyebrow">独立知识库</div>
-            <h1>为当前账号维护一套专属向量资料。</h1>
-            <p>
-              文件只会写入当前用户自己的 collection 和去重登记表。上传重复文件时会直接提醒，不会重复写入。
-            </p>
+      <div class="flex-1 overflow-y-auto">
+        <div v-if="pageLoading" class="flex items-center justify-center h-full">
+          <Loader2 class="w-6 h-6 text-zinc-300 animate-spin" />
+        </div>
+
+        <div v-else class="max-w-6xl mx-auto px-6 py-6 space-y-6">
+          <!-- Hero -->
+          <div>
+            <span class="inline-flex items-center px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-3">独立知识库</span>
+            <h1 class="text-xl font-bold text-[#0a0a0a] tracking-tight mb-1">知识库文档管理</h1>
+            <p class="text-sm text-zinc-500">独立导入文件并维护当前账号向量库。支持 PDF、Word、Excel、CSV、Markdown、TXT 格式。</p>
           </div>
 
-          <div class="dashboard-stats knowledge-hero__stats">
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><CollectionTag /></el-icon>
+          <!-- Info tiles -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
+                <Files class="w-4 h-4 text-zinc-500" />
               </div>
-              <div class="info-tile__copy">
-                <strong>{{ workspace.uploads.length }}</strong>
-                <span>当前账号下的独立文件总数</span>
-              </div>
-            </div>
-
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><Files /></el-icon>
-              </div>
-              <div class="info-tile__copy">
-                <strong>{{ activeSessionId ? "已关联当前会话" : "暂未关联会话" }}</strong>
-                <span>{{ latestUploadText }}</span>
+              <div>
+                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ workspace.uploads.length }}</p>
+                <p class="text-xs text-zinc-400">文件总数</p>
               </div>
             </div>
-
-            <div class="info-tile knowledge-info-tile knowledge-info-tile--action">
-              <div class="info-tile__icon">
-                <el-icon><ArrowLeft /></el-icon>
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
+                <Upload class="w-4 h-4 text-zinc-500" />
               </div>
-              <div class="info-tile__copy">
-                <strong>{{ activeSessionId ? "返回当前问答" : "返回工作台" }}</strong>
-                <span>{{ activeSessionId ? "继续回到当前会话提问" : "返回问答主页开始提问" }}</span>
+              <div>
+                <p class="text-xs text-zinc-600 truncate max-w-[140px]">{{ latestUploadText }}</p>
+                <p class="text-xs text-zinc-400">最近活动</p>
               </div>
-              <el-button plain round :icon="ArrowLeft" :disabled="importBusy" @click="openWorkspace">
-                返回问答
-              </el-button>
+            </div>
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
+                <ArrowLeft class="w-4 h-4 text-zinc-500" />
+              </div>
+              <div>
+                <p class="text-sm font-medium text-zinc-700">返回当前问答</p>
+                <button @click="openWorkspace()" class="text-xs text-blue-600 hover:underline mt-0.5">返回问答</button>
+              </div>
             </div>
           </div>
-        </header>
 
-        <KnowledgeDock
-          :busy="importBusy"
-          :batch-deleting="batchDeleting"
-          :deleting-upload-id="deletingUploadId"
-          :selected-upload-ids="selectedUploadIds"
-          :all-uploads-selected="allUploadsSelected"
-          :selected-upload-count="selectedUploadCount"
-          :total-upload-count="workspace.uploads.length"
-          :upload-search="uploadSearch"
-          :upload-tasks="uploadTasks"
-          :uploads="filteredUploads"
-          :model-settings="modelSettings"
-          :page-mode="true"
-          @import-files="importFiles"
-          @batch-delete="batchDeleteKnowledgeFiles"
-          @delete-file="deleteKnowledgeFile"
-          @toggle-select-all="toggleSelectAllUploads"
-          @toggle-upload="updateUploadSelection"
-          @update:upload-search="uploadSearch = $event"
-        />
-      </section>
+          <!-- KnowledgeDock -->
+          <div class="bg-white border border-[#ebebeb] rounded-xl overflow-hidden min-h-[400px] flex flex-col">
+            <KnowledgeDock
+              :busy="importBusy"
+              :upload-tasks="uploadTasks"
+              :uploads="filteredUploads"
+              :total-upload-count="workspace.uploads.length"
+              :model-settings="modelSettings"
+              :page-mode="true"
+              :deleting-upload-id="deletingUploadId"
+              :batch-deleting="batchDeleting"
+              :selected-upload-ids="selectedUploadIds"
+              :all-uploads-selected="allUploadsSelected"
+              :selected-upload-count="selectedUploadCount"
+              :upload-search="uploadSearch"
+              @import-files="importFiles"
+              @delete-file="deleteKnowledgeFile"
+              @batch-delete="batchDeleteKnowledgeFiles"
+              @toggle-select-all="toggleSelectAllUploads"
+              @toggle-upload="updateUploadSelection"
+              @update:upload-search="uploadSearch = $event"
+            />
+          </div>
+        </div>
+      </div>
     </div>
 
     <DeleteConfirmDialog
       v-model="deleteDialogVisible"
+      :tone="deleteDialogState.tone"
       :title="deleteDialogState.title"
       :summary="deleteDialogState.summary"
       :hint="deleteDialogState.hint"
       :items="deleteDialogState.items"
       :extra="deleteDialogState.extra"
       :confirm-text="deleteDialogState.confirmText"
-      :loading="!!deletingUploadId || batchDeleting"
-      @confirm="confirmDeleteDialog"
+      @confirm="deleteDialogState.onConfirm?.()"
     />
   </div>
 </template>
-
-<style scoped>
-.knowledge-page {
-  overflow: hidden;
-}
-
-.knowledge-hero {
-  display: block;
-}
-
-.knowledge-hero__copy {
-  max-width: 860px;
-}
-
-.knowledge-hero__stats {
-  margin-top: 18px;
-}
-
-.knowledge-info-tile {
-  justify-content: space-between;
-  align-items: center;
-}
-
-.knowledge-info-tile .info-tile__copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.knowledge-info-tile--action :deep(.el-button) {
-  flex: none;
-  height: 34px;
-  padding-inline: 14px;
-  border-color: rgba(46, 108, 246, 0.16);
-  color: var(--accent);
-}
-
-@media (max-width: 1080px) {
-  .knowledge-page {
-    overflow: auto;
-  }
-
-  .knowledge-info-tile {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-</style>

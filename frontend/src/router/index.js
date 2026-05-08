@@ -13,9 +13,7 @@ const routes = [
   {
     path: "/",
     redirect: () => {
-      return {
-        name: resolveHomeRoute(getCurrentSession()?.user),
-      };
+      return { name: resolveHomeRoute(getCurrentSession()?.user) };
     },
   },
   {
@@ -66,20 +64,16 @@ router.beforeEach(async (to) => {
   const shouldLoadUser = to.meta.requiresAuth || to.meta.requiresAdmin || to.meta.guestOnly;
   const user = hasToken && shouldLoadUser ? await ensureAuthenticatedUser() : null;
 
-  if (to.meta.requiresAuth) {
-    if (!user) {
-      return { name: "login" };
-    }
+  if (to.meta.requiresAuth && !user) {
+    return { name: "login" };
   }
 
   if (to.meta.requiresAdmin && !user?.isAdmin) {
     return { name: "workspace" };
   }
 
-  if (to.meta.guestOnly && hasToken) {
-    if (user) {
-      return { name: resolveHomeRoute(user) };
-    }
+  if (to.meta.guestOnly && hasToken && user) {
+    return { name: resolveHomeRoute(user) };
   }
 
   return true;

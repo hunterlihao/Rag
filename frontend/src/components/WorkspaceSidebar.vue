@@ -1,612 +1,199 @@
 <script setup>
 import { computed, ref } from "vue";
 import {
-  ChatDotRound,
-  Clock,
-  Delete,
-  EditPen,
-  Expand,
-  Fold,
-  Plus,
-  Search,
-  SwitchButton,
-} from "@element-plus/icons-vue";
-
-import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
+  MessageCircle, Database, Settings, Shield, Plus, Clock, Trash2,
+  PanelLeftOpen, PanelLeftClose, LogOut, Menu, X, Search, Loader2,
+} from "lucide-vue-next";
 import { formatRelativeTime } from "@/services/workspace";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
 
 const props = defineProps({
-  user: {
-    type: Object,
-    required: true,
-  },
-  sessions: {
-    type: Array,
-    required: true,
-  },
-  navItems: {
-    type: Array,
-    default: () => [],
-  },
-  currentRouteName: {
-    type: String,
-    default: "",
-  },
-  activeSessionId: {
-    type: String,
-    default: "",
-  },
-  searchValue: {
-    type: String,
-    default: "",
-  },
-  busy: {
-    type: Boolean,
-    default: false,
-  },
-  deletingSessionId: {
-    type: String,
-    default: "",
-  },
-  sessionDensity: {
-    type: String,
-    default: "comfy",
-  },
-  collapsed: {
-    type: Boolean,
-    default: false,
-  },
+  user: { type: Object, required: true },
+  sessions: { type: Array, required: true },
+  navItems: { type: Array, default: () => [] },
+  currentRouteName: { type: String, default: "" },
+  activeSessionId: { type: String, default: "" },
+  searchValue: { type: String, default: "" },
+  busy: { type: Boolean, default: false },
+  deletingSessionId: { type: String, default: "" },
+  sessionDensity: { type: String, default: "comfy" },
+  collapsed: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
-  "create-session",
-  "select-session",
-  "delete-session",
-  "update:search-value",
-  "navigate",
-  "logout",
-  "toggle-collapse",
+  "create-session", "select-session", "delete-session",
+  "update:search-value", "navigate", "logout", "toggle-collapse",
 ]);
 
-const userInitial = computed(() => props.user.name?.slice(0, 1)?.toUpperCase() || "U");
-const deleteDialogVisible = ref(false);
-const sessionPendingDelete = ref(null);
-const logoutDialogVisible = ref(false);
+const deleteTarget = ref(null);
+const showDeleteConfirm = ref(false);
+const showLogoutConfirm = ref(false);
+const mobileOpen = ref(false);
 
-function requestLogout() {
-  if (props.busy) {
-    return;
-  }
-  logoutDialogVisible.value = true;
-}
+const userInitial = computed(() => (props.user?.name || "U").slice(0, 1).toUpperCase());
+const isDense = computed(() => props.sessionDensity === "compact");
 
-async function requestDeleteSession(session) {
-  if (!session?.id || props.busy || props.deletingSessionId) {
-    return;
-  }
-  sessionPendingDelete.value = session;
-  deleteDialogVisible.value = true;
-}
+const navIconMap = {
+  workspace: MessageCircle, knowledge: Database,
+  settings: Settings, "admin-users": Shield,
+};
+function navIcon(name) { return navIconMap[name] || MessageCircle; }
+function isActive(name) { return props.currentRouteName === name; }
 
-function confirmDeleteSession() {
-  if (!sessionPendingDelete.value?.id) {
-    return;
-  }
-  const sessionId = sessionPendingDelete.value.id;
-  deleteDialogVisible.value = false;
-  sessionPendingDelete.value = null;
-  emit("delete-session", sessionId);
+function requestDelete(session) {
+  if (!session?.id || props.busy || props.deletingSessionId) return;
+  deleteTarget.value = session; showDeleteConfirm.value = true;
 }
-
-function confirmLogout() {
-  logoutDialogVisible.value = false;
-  emit("logout");
+function confirmDelete() {
+  if (!deleteTarget.value?.id) return;
+  emit("delete-session", deleteTarget.value.id);
+  showDeleteConfirm.value = false; deleteTarget.value = null;
 }
+function confirmLogout() { showLogoutConfirm.value = false; emit("logout"); }
+function handleNav(name) { mobileOpen.value = false; emit("navigate", name); }
+function handleSelectSession(id) { mobileOpen.value = false; emit("select-session", id); }
+function onSearchInput(e) { emit("update:search-value", e.target.value); }
 </script>
 
 <template>
-  <aside
-    class="workspace-sidebar"
-    :class="{
-      'workspace-sidebar--compact': sessionDensity === 'compact',
-      'workspace-sidebar--collapsed': collapsed,
-    }"
-  >
-    <div class="workspace-sidebar__topbar">
-      <div class="workspace-sidebar__brand">
-        <el-avatar :size="38" class="workspace-sidebar__avatar">{{ userInitial }}</el-avatar>
-        <div class="workspace-sidebar__brand-copy">
-          <strong>{{ user.name }}</strong>
-          <span>RAG Studio</span>
-        </div>
+  <!-- ===== Mobile menu button ===== -->
+  <button @click="mobileOpen = true" class="md:hidden fixed top-4 left-4 z-40 w-11 h-11 flex items-center justify-center bg-white border border-zinc-200 rounded-xl shadow-sm">
+    <Menu class="w-5 h-5 text-zinc-700" />
+  </button>
+
+  <!-- ===== Mobile overlay ===== -->
+  <div v-if="mobileOpen" class="md:hidden fixed inset-0 z-40 bg-black/40" @click="mobileOpen = false" />
+
+  <!-- ===== Mobile sidebar drawer ===== -->
+  <aside :class="['md:hidden fixed top-0 left-0 z-50 h-full transition-transform duration-300 bg-white border-r border-zinc-100 flex flex-col w-64', mobileOpen ? 'translate-x-0' : '-translate-x-full']">
+    <button @click="mobileOpen = false" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-zinc-900 z-10"><X class="w-5 h-5" /></button>
+    <div class="px-4 py-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-zinc-900 rounded-xl flex items-center justify-center text-white font-bold text-sm">{{ userInitial }}</div>
+        <span class="text-sm font-semibold text-zinc-900 tracking-tight">RAG Studio</span>
       </div>
-
-      <div class="workspace-sidebar__top-actions">
-        <button
-          type="button"
-          class="workspace-sidebar__icon-button"
-          :disabled="busy"
-          :title="collapsed ? '展开侧边栏' : '折叠侧边栏'"
-          @click="emit('toggle-collapse')"
-        >
-          <el-icon><component :is="collapsed ? Expand : Fold" /></el-icon>
-        </button>
-        <button
-          type="button"
-          class="workspace-sidebar__icon-button"
-          :disabled="busy"
-          title="新对话"
-          @click="emit('create-session')"
-        >
-          <el-icon><EditPen /></el-icon>
-        </button>
-      </div>
-    </div>
-
-    <button
-      type="button"
-      class="workspace-sidebar__create"
-      :disabled="busy"
-      title="新对话"
-      @click="emit('create-session')"
-    >
-      <span class="workspace-sidebar__create-main">
-        <el-icon><Plus /></el-icon>
-        <span>新对话</span>
-      </span>
-      <span class="workspace-sidebar__shortcut">Ctrl K</span>
-    </button>
-
-    <div class="workspace-sidebar__nav">
-      <button
-        v-for="item in navItems"
-        :key="item.name"
-        type="button"
-        class="workspace-nav-item"
-        :class="{ 'workspace-nav-item--active': item.name === currentRouteName }"
-        :disabled="busy"
-        :title="item.label"
-        @click="emit('navigate', item.name)"
-      >
-        <span class="workspace-nav-item__icon">
-          <el-icon><component :is="item.icon" /></el-icon>
-        </span>
-        <span class="workspace-nav-item__label">{{ item.label }}</span>
+      <button @click="emit('toggle-collapse')" class="p-1.5 hover:bg-zinc-100 rounded-lg transition-colors">
+        <PanelLeftClose class="w-4 h-4 text-zinc-400" />
       </button>
     </div>
-
-    <div v-if="!collapsed" class="workspace-sidebar__history-head">
-      <span>历史对话</span>
-      <span class="workspace-sidebar__history-count">{{ sessions.length }}</span>
-    </div>
-
-    <el-input
-      v-if="!collapsed"
-      class="workspace-sidebar__search"
-      :model-value="searchValue"
-      :prefix-icon="Search"
-      placeholder="搜索历史对话"
-      :disabled="busy"
-      @update:model-value="emit('update:search-value', $event)"
-    />
-
-    <el-scrollbar v-if="!collapsed" class="workspace-sidebar__list">
-      <div
-        v-for="session in sessions"
-        :key="session.id"
-        class="session-item"
-        :class="{ 'session-item--active': session.id === activeSessionId }"
-      >
-        <button
-          type="button"
-          class="session-item__main"
-          :disabled="busy"
-          @click="emit('select-session', session.id)"
-        >
-          <div class="session-item__title">
-            <el-icon><ChatDotRound /></el-icon>
-            <span>{{ session.title }}</span>
-          </div>
-          <div class="session-item__meta">
-            <span>{{ session.messageCount || 0 }} 条消息</span>
-            <span class="session-item__time">
-              <el-icon><Clock /></el-icon>
-              <span>{{ formatRelativeTime(session.updatedAt) }}</span>
-            </span>
-          </div>
-        </button>
-
-        <el-button
-          class="session-item__delete"
-          link
-          :icon="Delete"
-          :disabled="busy"
-          :loading="deletingSessionId === session.id"
-          @click.stop="requestDeleteSession(session)"
-        />
-      </div>
-    </el-scrollbar>
-
-    <div class="workspace-sidebar__footer">
-      <div class="workspace-sidebar__account">
-        <div class="workspace-sidebar__account-name">{{ user.email }}</div>
-        <div class="workspace-sidebar__account-role">
-          {{ user.isAdmin ? "管理员账号" : "普通账号" }}
-        </div>
-      </div>
-      <button type="button" class="workspace-sidebar__logout" title="退出登录" @click="requestLogout">
-        <el-icon><SwitchButton /></el-icon>
-        <span>退出登录</span>
+    <div class="px-4 mb-3">
+      <button @click="emit('create-session'); mobileOpen = false" :disabled="busy" class="w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium text-zinc-700 bg-zinc-50 hover:bg-zinc-100 rounded-xl transition-colors disabled:opacity-50">
+        <span class="flex items-center gap-2"><Plus class="w-4 h-4" /> 新对话</span>
+        <span class="text-xs text-zinc-400 bg-zinc-200/60 px-1.5 py-0.5 rounded">Ctrl K</span>
       </button>
     </div>
-
-    <DeleteConfirmDialog
-      v-model="deleteDialogVisible"
-      title="删除会话"
-      confirm-text="确认删除"
-      :summary="sessionPendingDelete ? `确认删除会话「${sessionPendingDelete.title}」吗？` : ''"
-      hint="删除后，该会话下的消息记录会一起移除。"
-      :items="sessionPendingDelete ? [{ id: sessionPendingDelete.id, name: sessionPendingDelete.title }] : []"
-      extra="删除完成后无法从页面恢复。"
-      @confirm="confirmDeleteSession"
-    />
-
-    <DeleteConfirmDialog
-      v-model="logoutDialogVisible"
-      tone="primary"
-      title="退出登录"
-      badge-text="需要重新登录"
-      confirm-text="确认退出"
-      summary="确定要退出当前账号吗？"
-      hint="退出后，将返回登录页。需要重新登录才能继续访问当前工作区。"
-      extra="这不会删除任何会话和知识库数据。"
-      @confirm="confirmLogout"
-    />
+    <nav class="px-3 space-y-0.5">
+      <button v-for="item in navItems" :key="item.name" @click="handleNav(item.name)" :class="['w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl transition-colors', isActive(item.name) ? 'bg-zinc-100 text-zinc-900 font-medium' : 'text-zinc-600 hover:bg-zinc-50']">
+        <component :is="navIcon(item.name)" class="w-4 h-4 flex-shrink-0" />
+        <span>{{ item.label }}</span>
+      </button>
+    </nav>
+    <div class="flex-1 overflow-hidden flex flex-col px-3 mt-4">
+      <div class="flex items-center justify-between px-1 mb-2">
+        <span class="text-xs font-medium text-zinc-400 uppercase tracking-wider">历史对话</span>
+        <span class="text-xs text-zinc-400 bg-zinc-100 px-1.5 py-0.5 rounded-full numeric">{{ sessions.length }}</span>
+      </div>
+      <div class="relative mb-2">
+        <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400" />
+        <input :value="searchValue" @input="onSearchInput" placeholder="搜索..." :disabled="busy" class="w-full h-8 pl-8 pr-3 bg-zinc-50 border border-zinc-100 rounded-lg text-xs focus:outline-none focus:border-zinc-200 transition-colors" />
+      </div>
+      <div class="flex-1 overflow-y-auto space-y-0.5">
+        <div v-for="s in sessions" :key="s.id" :class="['group flex items-center gap-1 rounded-xl transition-colors cursor-pointer', s.id === activeSessionId ? 'bg-zinc-100' : 'hover:bg-zinc-50', isDense ? 'px-2 py-1.5' : 'px-3 py-2']">
+          <button @click="handleSelectSession(s.id)" :disabled="busy" class="flex-1 text-left min-w-0">
+            <div class="text-sm font-medium text-zinc-700 truncate">{{ s.title }}</div>
+            <div :class="['flex items-center gap-2 text-xs text-zinc-400', isDense ? 'mt-0.5' : 'mt-1']">
+              <span class="numeric">{{ s.messageCount || 0 }} 条</span>
+              <Clock class="w-3 h-3" />
+              <span>{{ formatRelativeTime(s.updatedAt) }}</span>
+            </div>
+          </button>
+          <button @click.stop="requestDelete(s)" :disabled="busy" class="p-1 text-zinc-300 hover:text-red-500 hover:bg-red-50 rounded transition-all shrink-0">
+            <Loader2 v-if="deletingSessionId === s.id" class="w-3.5 h-3.5 animate-spin" />
+            <Trash2 v-else class="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div v-if="!sessions.length" class="text-center text-xs text-zinc-400 py-8">暂无历史对话</div>
+      </div>
+    </div>
+    <div class="border-t border-zinc-100 p-4">
+      <div class="text-xs text-zinc-600 truncate mb-0.5">{{ user.email }}</div>
+      <div class="text-xs text-zinc-400 mb-3">{{ user.isAdmin ? '管理员' : '普通用户' }}</div>
+      <button @click="showLogoutConfirm = true" :disabled="busy" class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-colors"><LogOut class="w-4 h-4" /> 退出登录</button>
+    </div>
   </aside>
+
+  <!-- ===== Desktop sidebar ===== -->
+  <aside class="hidden md:flex flex-col h-full bg-white border-r border-zinc-100 w-64 shrink-0 transition-[margin-left] duration-300" :class="{ '-ml-64': collapsed }">
+    <div class="px-4 py-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-zinc-900 rounded-xl flex items-center justify-center text-white font-bold text-sm">{{ userInitial }}</div>
+        <span class="text-sm font-semibold text-zinc-900 tracking-tight">RAG Studio</span>
+      </div>
+      <button @click="emit('toggle-collapse')" class="p-1.5 hover:bg-zinc-100 rounded-lg transition-colors" title="隐藏侧边栏">
+        <PanelLeftClose class="w-4 h-4 text-zinc-400" />
+      </button>
+    </div>
+
+    <div class="px-4 mb-3">
+      <button @click="emit('create-session')" :disabled="busy" class="w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium text-zinc-700 bg-zinc-50 hover:bg-zinc-100 rounded-xl transition-colors disabled:opacity-50">
+        <span class="flex items-center gap-2"><Plus class="w-4 h-4" /> 新对话</span>
+        <span class="text-xs text-zinc-400 bg-zinc-200/60 px-1.5 py-0.5 rounded">Ctrl K</span>
+      </button>
+    </div>
+
+    <nav class="px-3 space-y-0.5">
+      <button v-for="item in navItems" :key="item.name" @click="handleNav(item.name)" :class="['w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl transition-colors', isActive(item.name) ? 'bg-zinc-100 text-zinc-900 font-medium' : 'text-zinc-600 hover:bg-zinc-50']">
+        <component :is="navIcon(item.name)" class="w-4 h-4 flex-shrink-0" />
+        <span>{{ item.label }}</span>
+      </button>
+    </nav>
+
+    <div class="flex-1 overflow-hidden flex flex-col px-3 mt-4">
+      <div class="flex items-center justify-between px-1 mb-2">
+        <span class="text-xs font-medium text-zinc-400 uppercase tracking-wider">历史对话</span>
+        <span class="text-xs text-zinc-400 bg-zinc-100 px-1.5 py-0.5 rounded-full numeric">{{ sessions.length }}</span>
+      </div>
+      <div class="relative mb-2">
+        <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400" />
+        <input :value="searchValue" @input="onSearchInput" placeholder="搜索历史对话" :disabled="busy" class="w-full h-8 pl-8 pr-3 bg-zinc-50 border border-zinc-100 rounded-lg text-xs focus:outline-none focus:border-zinc-200 transition-colors" />
+      </div>
+      <div class="flex-1 overflow-y-auto space-y-0.5">
+        <div v-for="s in sessions" :key="s.id" :class="['group flex items-center gap-1 rounded-xl transition-colors cursor-pointer', s.id === activeSessionId ? 'bg-zinc-100' : 'hover:bg-zinc-50', isDense ? 'px-2 py-1.5' : 'px-3 py-2']">
+          <button @click="handleSelectSession(s.id)" :disabled="busy" class="flex-1 text-left min-w-0">
+            <div class="text-sm font-medium text-zinc-700 truncate">{{ s.title }}</div>
+            <div :class="['flex items-center gap-2 text-xs text-zinc-400', isDense ? 'mt-0.5' : 'mt-1']">
+              <span class="numeric">{{ s.messageCount || 0 }} 条</span>
+              <Clock class="w-3 h-3" />
+              <span>{{ formatRelativeTime(s.updatedAt) }}</span>
+            </div>
+          </button>
+          <button @click.stop="requestDelete(s)" :disabled="busy" class="p-1 text-zinc-300 hover:text-red-500 hover:bg-red-50 rounded transition-all shrink-0">
+            <Loader2 v-if="deletingSessionId === s.id" class="w-3.5 h-3.5 animate-spin" />
+            <Trash2 v-else class="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div v-if="!sessions.length" class="text-center text-xs text-zinc-400 py-8">暂无历史对话</div>
+      </div>
+    </div>
+
+    <div class="border-t border-zinc-100 p-4">
+      <div class="text-xs text-zinc-600 truncate mb-0.5">{{ user.email }}</div>
+      <div class="text-xs text-zinc-400 mb-3">{{ user.isAdmin ? '管理员' : '普通用户' }}</div>
+      <button @click="showLogoutConfirm = true" :disabled="busy" class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-colors"><LogOut class="w-4 h-4" /> 退出登录</button>
+    </div>
+  </aside>
+
+  <!-- ===== Floating button when sidebar hidden (centered vertically) ===== -->
+  <button
+    v-if="collapsed"
+    @click="emit('toggle-collapse')"
+    class="hidden md:flex fixed left-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 items-center justify-center bg-white border border-zinc-200 rounded-lg shadow-sm hover:bg-zinc-50 transition-colors"
+    title="显示侧边栏"
+  >
+    <PanelLeftOpen class="w-4 h-4 text-zinc-500" />
+  </button>
+
+  <!-- ===== Modals ===== -->
+  <DeleteConfirmDialog v-model="showDeleteConfirm" title="删除会话" confirm-text="确认删除" :summary="deleteTarget ? `确认删除会话「${deleteTarget.title}」吗？` : ''" hint="删除后，该会话下的消息记录会一起移除。" :items="deleteTarget ? [{ id: deleteTarget.id, name: deleteTarget.title }] : []" extra="删除完成后无法从页面恢复。" @confirm="confirmDelete" />
+  <DeleteConfirmDialog v-model="showLogoutConfirm" tone="primary" title="退出登录" badge-text="需要重新登录" confirm-text="确认退出" summary="确定要退出当前账号吗？" hint="退出后，将返回登录页。需要重新登录才能继续访问当前工作区。" extra="这不会删除任何会话和知识库数据。" @confirm="confirmLogout" />
 </template>
-
-<style scoped>
-.workspace-sidebar {
-  height: calc(100vh - 48px);
-  padding: 14px 14px 12px;
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.96);
-  color: var(--sidebar-ink);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  box-shadow: var(--shadow-soft);
-  border: 1px solid rgba(32, 85, 186, 0.08);
-  transition: width 0.22s ease, padding 0.22s ease;
-}
-
-.workspace-sidebar__topbar,
-.workspace-sidebar__brand,
-.workspace-sidebar__top-actions {
-  display: flex;
-  align-items: center;
-}
-
-.workspace-sidebar__topbar {
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 4px 8px;
-}
-
-.workspace-sidebar__brand {
-  gap: 10px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.workspace-sidebar__avatar {
-  background: linear-gradient(135deg, #1d56d9, #7aafff);
-  color: #fff;
-  font-weight: 800;
-}
-
-.workspace-sidebar__brand-copy {
-  min-width: 0;
-}
-
-.workspace-sidebar__brand-copy strong,
-.workspace-sidebar__brand-copy span {
-  display: block;
-}
-
-.workspace-sidebar__brand-copy strong {
-  font-size: 1.1rem;
-  color: var(--ink);
-}
-
-.workspace-sidebar__brand-copy span {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.workspace-sidebar__top-actions {
-  gap: 8px;
-  flex: none;
-}
-
-.workspace-sidebar__icon-button {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: none;
-  border-radius: 12px;
-  background: rgba(245, 248, 255, 0.95);
-  color: var(--ink);
-  cursor: pointer;
-}
-
-.workspace-sidebar__create {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(46, 108, 246, 0.18);
-  border-radius: 18px;
-  background: rgba(237, 244, 255, 0.88);
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.workspace-sidebar__create-main {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-}
-
-.workspace-sidebar__shortcut {
-  padding: 2px 6px;
-  border-radius: 8px;
-  background: rgba(46, 108, 246, 0.08);
-  color: rgba(46, 108, 246, 0.72);
-  font-size: 0.76rem;
-}
-
-.workspace-sidebar__nav {
-  display: grid;
-  gap: 4px;
-  padding: 4px 0 6px;
-}
-
-.workspace-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: none;
-  border-radius: 14px;
-  background: transparent;
-  color: var(--ink);
-  cursor: pointer;
-  text-align: left;
-}
-
-.workspace-nav-item:hover,
-.workspace-nav-item--active {
-  background: rgba(240, 246, 255, 0.96);
-  color: var(--accent);
-}
-
-.workspace-nav-item__icon {
-  width: 22px;
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-}
-
-.workspace-nav-item__label {
-  font-size: 1rem;
-}
-
-.workspace-sidebar__history-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 6px 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.workspace-sidebar__history-count {
-  min-width: 22px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: rgba(237, 244, 255, 0.92);
-  color: var(--accent);
-  text-align: center;
-  font-size: 0.8rem;
-}
-
-.workspace-sidebar__search {
-  margin-top: 2px;
-}
-
-.workspace-sidebar__list {
-  flex: 1;
-  padding-right: 4px;
-}
-
-.session-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: start;
-  padding: 8px 8px 8px 10px;
-  margin-bottom: 6px;
-  border-radius: 16px;
-  background: transparent;
-  transition: background 0.18s ease;
-}
-
-.session-item:hover,
-.session-item--active {
-  background: rgba(245, 248, 255, 0.98);
-}
-
-.session-item__main {
-  width: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--ink);
-  cursor: pointer;
-  text-align: left;
-}
-
-.session-item__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.98rem;
-  font-weight: 600;
-}
-
-.session-item__title span {
-  display: block;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.session-item__meta {
-  margin-top: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.session-item__time {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.session-item__delete {
-  margin-top: 2px;
-  color: rgba(20, 40, 71, 0.44);
-}
-
-.workspace-sidebar__footer {
-  display: grid;
-  gap: 10px;
-  padding: 10px 6px 4px;
-  border-top: 1px solid rgba(32, 85, 186, 0.08);
-}
-
-.workspace-sidebar__account-name {
-  font-size: 0.88rem;
-  color: var(--ink);
-  word-break: break-all;
-}
-
-.workspace-sidebar__account-role {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.workspace-sidebar__logout {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  height: 40px;
-  border: none;
-  border-radius: 14px;
-  background: rgba(245, 248, 255, 0.95);
-  color: var(--ink);
-  cursor: pointer;
-}
-
-.workspace-sidebar--collapsed {
-  padding: 14px 10px 12px;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__topbar {
-  justify-content: center;
-  align-items: stretch;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__brand {
-  justify-content: center;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__brand-copy,
-.workspace-sidebar--collapsed .workspace-sidebar__shortcut,
-.workspace-sidebar--collapsed .workspace-nav-item__label,
-.workspace-sidebar--collapsed .workspace-sidebar__account {
-  display: none;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__top-actions {
-  justify-content: center;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__create {
-  justify-content: center;
-  width: 52px;
-  height: 52px;
-  margin: 0 auto;
-  padding: 0;
-  border-radius: 18px;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__create-main {
-  gap: 0;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__nav {
-  justify-items: center;
-}
-
-.workspace-sidebar--collapsed .workspace-nav-item {
-  justify-content: center;
-  width: 100%;
-  padding: 12px 0;
-}
-
-.workspace-sidebar--collapsed .workspace-nav-item__icon {
-  width: auto;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__footer {
-  justify-items: center;
-  padding-left: 0;
-  padding-right: 0;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__logout {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  padding: 0;
-}
-
-.workspace-sidebar--collapsed .workspace-sidebar__create-main > span,
-.workspace-sidebar--collapsed .workspace-sidebar__logout span {
-  display: none;
-}
-
-.workspace-sidebar--compact .session-item {
-  padding: 6px 8px 6px 10px;
-}
-
-.workspace-sidebar--compact .session-item__meta {
-  margin-top: 4px;
-}
-</style>

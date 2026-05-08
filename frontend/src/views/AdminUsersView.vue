@@ -1,41 +1,20 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
-import {
-  Delete,
-  EditPen,
-  Plus,
-  RefreshRight,
-  Search,
-  Setting,
-  UserFilled,
-} from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { ArrowLeft, User, Mail, Lock, Shield, Trash2, Plus, X, Loader2, Search, RefreshCw, Users, UserCheck, AlertCircle } from "lucide-vue-next";
 
 import ActionBusyOverlay from "@/components/ActionBusyOverlay.vue";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
-import DialogHeroHeader from "@/components/DialogHeroHeader.vue";
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue";
 import { getCurrentUser, logout, replaceCurrentUser } from "@/services/auth";
 import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from "@/services/shell";
-import {
-  createAdminUser,
-  deleteAdminUser,
-  fetchAdminUsers,
-  getPreferences,
-  savePreferences,
-  updateAdminUser,
-} from "@/services/user";
+import { createAdminUser, deleteAdminUser, fetchAdminUsers, getPreferences, savePreferences, updateAdminUser } from "@/services/user";
 import { createSession, deleteSession, fetchSessions } from "@/services/workspace";
 
-const route = useRoute();
 const router = useRouter();
 const user = ref(getCurrentUser());
 const preferences = ref(getPreferences(user.value));
-
-const workspace = reactive({
-  sessions: [],
-});
+const workspace = reactive({ sessions: [] });
 const userRows = ref([]);
 const pageLoading = ref(false);
 const tableLoading = ref(false);
@@ -48,101 +27,42 @@ const activeSessionId = ref("");
 const currentAdminId = ref("");
 const dialogVisible = ref(false);
 const formMode = ref("create");
-const formRef = ref(null);
+const formError = ref("");
 const deleteDialogVisible = ref(false);
 const userPendingDelete = ref(null);
-const formDialogMeta = computed(() => {
-  const isCreate = formMode.value === "create";
-  return {
-    icon: isCreate ? Plus : EditPen,
-    title: isCreate ? "新增用户" : "编辑用户",
-    badgeText: isCreate ? "创建账号" : "更新账号",
-    description: isCreate
-      ? "填写基础资料、初始密码和角色信息后创建新账号。"
-      : "修改账号资料、密码或管理员角色，变更会立即生效。",
-  };
-});
-const deleteBusyState = computed(() => {
-  if (deletingUserId.value) {
-    return {
-      visible: true,
-      badgeText: "删除处理中",
-      title: "正在删除用户",
-      description: "用户数据、会话历史和独立知识库内容正在同步清理，请等待完成。",
-    };
-  }
 
-  return {
-    visible: !!deletingSessionId.value,
-    badgeText: "删除处理中",
-    title: "正在删除会话",
-    description: "会话记录正在清理并刷新管理台左侧历史列表，请稍候。",
-  };
-});
+const sidebarBusy = computed(() => !!deletingSessionId.value || !!deletingUserId.value);
 const navItems = computed(() => buildSidebarNavItems(user.value));
-const dashboardGridStyle = computed(() => ({
-  "--dashboard-sidebar-width": preferences.value.sidebarCollapsed ? "88px" : "320px",
-}));
-
-const form = reactive({
-  id: "",
-  name: "",
-  email: "",
-  password: "",
-  is_admin: false,
-});
-
-const formRules = {
-  name: [{ required: true, message: "请输入昵称", trigger: "blur" }],
-  email: [
-    { required: true, message: "请输入邮箱", trigger: "blur" },
-    { type: "email", message: "邮箱格式不正确", trigger: ["blur", "change"] },
-  ],
-  password: [
-    {
-      validator: (_rule, value, callback) => {
-        if (formMode.value === "create" && !value) {
-          callback(new Error("请设置初始密码"));
-          return;
-        }
-        if (value && value.length < 6) {
-          callback(new Error("密码至少需要 6 位"));
-          return;
-        }
-        callback();
-      },
-      trigger: ["blur", "change"],
-    },
-  ],
-};
 
 const filteredSessions = computed(() => {
-  const keyword = sessionSearch.value.trim().toLowerCase();
+  const kw = sessionSearch.value.trim().toLowerCase();
   return [...workspace.sessions]
-    .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))
-    .filter((session) => {
-      if (!keyword) {
-        return true;
-      }
-      return `${session.title} ${session.preview || ""}`.toLowerCase().includes(keyword);
-    });
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .filter((s) => !kw || `${s.title} ${s.preview || ""}`.toLowerCase().includes(kw));
 });
 
-const adminCount = computed(() => userRows.value.filter((item) => item.isAdmin).length);
-const normalUserCount = computed(() => userRows.value.length - adminCount.value);
+const adminCount = computed(() => userRows.value.filter((u) => u.is_admin).length);
+const normalUserCount = computed(() => userRows.value.filter((u) => !u.is_admin).length);
 const todayCreatedCount = computed(() => {
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = today.getMonth();
-  const dd = today.getDate();
-  return userRows.value.filter((item) => {
-    const createdAt = new Date(item.createdAt);
-    return (
-      createdAt.getFullYear() === yyyy &&
-      createdAt.getMonth() === mm &&
-      createdAt.getDate() === dd
-    );
+  const today = new Date().toDateString();
+  return userRows.value.filter((u) => {
+    const d = u.created_at ? new Date(u.created_at).toDateString() : null;
+    return d === today;
   }).length;
+});
+
+const form = reactive({ id: "", name: "", email: "", password: "", is_admin: false });
+
+const formRules = computed(() => ({
+  name: { required: true, message: "请输入用户名" },
+  email: { required: true, message: "请输入邮箱", pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+  password: formMode.value === "create" ? { required: true, message: "密码至少6位", min: 6 } : null,
+}));
+
+const busyOverlayState = computed(() => {
+  if (deletingUserId.value) return { visible: true, badgeText: "删除中", title: "正在删除用户", description: "用户数据正在清理。" };
+  if (deletingSessionId.value) return { visible: true, badgeText: "删除处理中", title: "正在删除会话", description: "会话记录正在清理。" };
+  return { visible: false };
 });
 
 function normalizeUserRow(row) {
@@ -150,184 +70,108 @@ function normalizeUserRow(row) {
     id: row.id,
     name: row.name,
     email: row.email,
-    isAdmin: Boolean(row.is_admin ?? row.isAdmin),
-    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    is_admin: Boolean(row.is_admin ?? row.isAdmin),
+    created_at: row.created_at || row.createdAt,
   };
 }
 
+function formatDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
 async function refreshSessions() {
-  const sessionList = await fetchSessions();
-  workspace.sessions.splice(
-    0,
-    workspace.sessions.length,
-    ...sessionList.map((session) => normalizeShellSession(session)),
-  );
-  activeSessionId.value = workspace.sessions[0]?.id || "";
+  const list = await fetchSessions();
+  workspace.sessions = list.map((s) => ({ ...normalizeShellSession(s), welcomeMessage: "" }));
+  if (workspace.sessions.length) activeSessionId.value = workspace.sessions[0].id;
 }
 
 async function refreshUsers() {
   tableLoading.value = true;
   try {
     const result = await fetchAdminUsers(userKeyword.value);
-    userRows.value = (result.users || []).map((item) => normalizeUserRow(item));
+    userRows.value = (result.users || []).map(normalizeUserRow);
     currentAdminId.value = result.current_admin_id || "";
-  } catch (error) {
-    ElMessage.error(error.message || "加载用户列表失败");
   } finally {
     tableLoading.value = false;
   }
 }
 
-function navigateTo(name) {
-  router.push(buildRouteLocation(name, activeSessionId.value));
+function navigateTo(name) { router.push(buildRouteLocation(name, activeSessionId.value)); }
+async function createNewSession() { const s = await createSession(); router.push(buildRouteLocation("workspace", s.id)); }
+function selectSession(id) { router.push(buildRouteLocation("workspace", id)); }
+async function handleDeleteSession(id) {
+  if (!id || sidebarBusy.value) return;
+  deletingSessionId.value = id;
+  try { await deleteSession(id); workspace.sessions = workspace.sessions.filter((s) => s.id !== id); } finally { deletingSessionId.value = ""; }
 }
-
-async function createNewSession() {
-  const session = await createSession();
-  router.push(buildRouteLocation("workspace", session.id));
-}
-
-async function selectSession(sessionId) {
-  router.push(buildRouteLocation("workspace", sessionId));
-}
-
-async function handleDeleteSession(sessionId) {
-  if (!sessionId || deletingSessionId.value) {
-    return;
-  }
-
-  deletingSessionId.value = sessionId;
-  try {
-    await deleteSession(sessionId);
-    await refreshSessions();
-    ElMessage.success("会话已删除");
-  } catch (error) {
-    ElMessage.error(error.message || "删除会话失败");
-  } finally {
-    deletingSessionId.value = "";
-  }
-}
-
-async function handleLogout() {
-  await logout();
-  router.push("/login");
-}
-
-function toggleSidebarCollapse() {
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      sidebarCollapsed: !preferences.value.sidebarCollapsed,
-    },
-    user.value,
-  );
-}
-
-function resetForm() {
-  form.id = "";
-  form.name = "";
-  form.email = "";
-  form.password = "";
-  form.is_admin = false;
-}
+async function handleLogout() { await logout(); router.push("/login"); }
+function toggleSidebarCollapse() { preferences.value = savePreferences({ ...preferences.value, sidebarCollapsed: !preferences.value.sidebarCollapsed }, user.value); }
 
 function openCreateDialog() {
-  formMode.value = "create";
-  resetForm();
+  formMode.value = "create"; formError.value = "";
+  form.id = ""; form.name = ""; form.email = ""; form.password = ""; form.is_admin = false;
   dialogVisible.value = true;
 }
-
 function openEditDialog(row) {
-  formMode.value = "edit";
-  form.id = row.id;
-  form.name = row.name;
-  form.email = row.email;
-  form.password = "";
-  form.is_admin = row.isAdmin;
+  formMode.value = "edit"; formError.value = "";
+  form.id = row.id; form.name = row.name; form.email = row.email; form.password = ""; form.is_admin = row.is_admin;
   dialogVisible.value = true;
 }
 
 async function submitUserForm() {
-  const valid = await formRef.value?.validate().catch(() => false);
-  if (!valid || saving.value) {
-    return;
-  }
-
+  formError.value = "";
+  if (!form.name.trim()) { formError.value = "请输入用户名"; return; }
+  if (!form.email.trim()) { formError.value = "请输入邮箱"; return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { formError.value = "邮箱格式不正确"; return; }
+  if (formMode.value === "create" && !form.password.trim()) { formError.value = "请输入密码（至少6位）"; return; }
+  if (form.password.trim() && form.password.trim().length < 6) { formError.value = "密码至少需要6位"; return; }
   saving.value = true;
   try {
     if (formMode.value === "create") {
-      await createAdminUser({
-        name: form.name,
-        email: form.email,
-        password: form.password,
-        is_admin: form.is_admin,
-      });
-      ElMessage.success("用户创建成功");
+      await createAdminUser({ name: form.name, email: form.email, password: form.password, is_admin: form.is_admin });
     } else {
-      const result = await updateAdminUser(form.id, {
-        name: form.name,
-        email: form.email,
-        password: form.password,
-        is_admin: form.is_admin,
-      });
-
-      if (result.user?.id === user.value?.id) {
-        user.value = replaceCurrentUser(result.user, result.access_token);
-        if (!user.value?.isAdmin) {
-          ElMessage.success("当前账号已移出管理员角色，正在返回问答主页。");
-          dialogVisible.value = false;
-          router.push({ name: "workspace" });
-          return;
-        }
-      }
-
-      ElMessage.success("用户更新成功");
+      const payload = { name: form.name, email: form.email, is_admin: form.is_admin };
+      if (form.password.trim()) payload.password = form.password;
+      const result = await updateAdminUser(form.id, payload);
+      if (result.user && result.user.id === user.value?.id) user.value = replaceCurrentUser(result.user, result.access_token);
     }
-
     dialogVisible.value = false;
     await refreshUsers();
-  } catch (error) {
-    ElMessage.error(error.message || "保存用户失败");
+  } catch (err) {
+    formError.value = err.message || "保存失败";
   } finally {
     saving.value = false;
   }
 }
 
-async function removeUser(row) {
-  if (!row?.id || deletingUserId.value) {
-    return;
-  }
+function removeUser(row) {
   userPendingDelete.value = row;
   deleteDialogVisible.value = true;
 }
 
 async function confirmDeleteUser() {
-  if (!userPendingDelete.value?.id) {
-    return;
-  }
-  const row = userPendingDelete.value;
+  if (!userPendingDelete.value) return;
+  const u = userPendingDelete.value;
   deleteDialogVisible.value = false;
-  userPendingDelete.value = null;
-  deletingUserId.value = row.id;
-  try {
-    await deleteAdminUser(row.id);
-    ElMessage.success("用户已删除");
-    await refreshUsers();
-  } catch (error) {
-    ElMessage.error(error.message || "删除用户失败");
-  } finally {
-    deletingUserId.value = "";
-  }
+  deletingUserId.value = u.id;
+  try { await deleteAdminUser(u.id); await refreshUsers(); } finally { deletingUserId.value = ""; }
 }
+
+watch(activeSessionId, (id) => {
+  if (router.currentRoute?.value?.name !== "admin-users") return;
+  router.replace({ name: "admin-users", query: id ? { session: id } : {} });
+});
 
 onMounted(async () => {
   pageLoading.value = true;
   try {
     user.value = getCurrentUser();
     preferences.value = getPreferences(user.value);
-    await Promise.all([refreshSessions(), refreshUsers()]);
-  } catch (error) {
-    ElMessage.error(error.message || "用户管理页面加载失败");
+    await refreshSessions();
+    await refreshUsers();
+  } catch {
+    if (!getCurrentUser()) router.push("/login");
   } finally {
     pageLoading.value = false;
   }
@@ -335,284 +179,201 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-loading="pageLoading" class="page-shell admin-page">
-    <ActionBusyOverlay
-      :visible="deleteBusyState.visible"
-      :badge-text="deleteBusyState.badgeText"
-      :title="deleteBusyState.title"
-      :description="deleteBusyState.description"
+  <div class="flex h-screen bg-[#FAFAFA]">
+    <ActionBusyOverlay v-bind="busyOverlayState" />
+
+    <WorkspaceSidebar
+      :user="user"
+      :sessions="filteredSessions"
+      :nav-items="navItems"
+      :current-route-name="'admin-users'"
+      :active-session-id="activeSessionId"
+      :search-value="sessionSearch"
+      :busy="sidebarBusy"
+      :deleting-session-id="deletingSessionId"
+      :session-density="preferences.sessionDensity"
+      :collapsed="preferences.sidebarCollapsed"
+      @create-session="createNewSession"
+      @select-session="selectSession"
+      @delete-session="handleDeleteSession"
+      @navigate="navigateTo"
+      @toggle-collapse="toggleSidebarCollapse"
+      @update:search-value="sessionSearch = $event"
+      @logout="handleLogout"
     />
 
-    <div class="dashboard-grid" :style="dashboardGridStyle">
-      <WorkspaceSidebar
-        :user="user"
-        :sessions="filteredSessions"
-        :nav-items="navItems"
-        :current-route-name="String(route.name || '')"
-        :active-session-id="activeSessionId"
-        :search-value="sessionSearch"
-        :busy="tableLoading || saving || !!deletingUserId"
-        :deleting-session-id="deletingSessionId"
-        :session-density="preferences.sessionDensity"
-        :collapsed="preferences.sidebarCollapsed"
-        @create-session="createNewSession"
-        @select-session="selectSession"
-        @delete-session="handleDeleteSession"
-        @navigate="navigateTo"
-        @toggle-collapse="toggleSidebarCollapse"
-        @update:search-value="sessionSearch = $event"
-        @logout="handleLogout"
-      />
+    <div class="flex-1 flex flex-col min-w-0">
+      <header class="h-12 bg-white border-b border-zinc-100 flex items-center px-6 shrink-0">
+        <button @click="router.push('/workspace')" class="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-700 transition-colors">
+          <ArrowLeft class="w-4 h-4" /> 返回
+        </button>
+        <span class="mx-3 text-zinc-300">/</span>
+        <span class="text-sm font-medium text-zinc-700">用户管理</span>
+      </header>
 
-      <section class="dashboard-stage">
-        <header class="dashboard-hero glass-panel">
-          <div class="dashboard-copy">
-            <div class="dashboard-eyebrow">管理员控制台</div>
-            <h1>在一个界面里完成用户基础管理。</h1>
-            <p>
-              管理员账号可以直接查询、新增、编辑和删除用户。删除用户时，会同步清理对应会话历史与独立知识库内容。
-            </p>
+      <div class="flex-1 overflow-y-auto">
+        <div v-if="pageLoading" class="flex items-center justify-center h-full">
+          <Loader2 class="w-6 h-6 text-zinc-300 animate-spin" />
+        </div>
+
+        <div v-else class="max-w-6xl mx-auto px-6 py-6 space-y-6">
+          <!-- Hero -->
+          <div>
+            <span class="inline-flex items-center px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-3">管理员控制台</span>
+            <h1 class="text-xl font-bold text-[#0a0a0a] tracking-tight mb-1">系统用户管理</h1>
+            <p class="text-sm text-zinc-500">管理员可维护系统用户与权限，当前管理员工号：{{ currentAdminId || '—' }}</p>
           </div>
 
-          <div class="dashboard-stats">
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><UserFilled /></el-icon>
+          <!-- Info tiles -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
+                <Users class="w-4 h-4 text-zinc-500" />
               </div>
-              <div class="info-tile__copy">
-                <strong>{{ userRows.length }}</strong>
-                <span>系统总用户数</span>
-              </div>
-            </div>
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><Setting /></el-icon>
-              </div>
-              <div class="info-tile__copy">
-                <strong>{{ adminCount }}</strong>
-                <span>管理员账号数</span>
+              <div>
+                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ userRows.length }}</p>
+                <p class="text-xs text-zinc-400">总用户数</p>
               </div>
             </div>
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><Plus /></el-icon>
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
+                <Shield class="w-4 h-4 text-amber-600" />
               </div>
-              <div class="info-tile__copy">
-                <strong>{{ todayCreatedCount }}</strong>
-                <span>今日新增用户</span>
+              <div>
+                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ adminCount }}</p>
+                <p class="text-xs text-zinc-400">管理员 / {{ normalUserCount }} 普通</p>
+              </div>
+            </div>
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center">
+                <UserCheck class="w-4 h-4 text-emerald-600" />
+              </div>
+              <div>
+                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ todayCreatedCount }}</p>
+                <p class="text-xs text-zinc-400">今日新增</p>
               </div>
             </div>
           </div>
-        </header>
 
-        <section class="soft-card content-card panel-stack">
-          <div class="panel-toolbar">
-            <el-input
-              v-model="userKeyword"
-              clearable
-              class="admin-toolbar__search"
-              placeholder="按昵称或邮箱搜索用户"
-              :prefix-icon="Search"
-              @keyup.enter="refreshUsers"
-            />
-            <div class="panel-toolbar__actions">
-              <el-button plain :icon="RefreshRight" @click="refreshUsers">刷新</el-button>
-              <el-button type="primary" :icon="Plus" @click="openCreateDialog">新增用户</el-button>
+          <!-- Toolbar -->
+          <div class="flex items-center gap-2">
+            <div class="relative flex-1 max-w-xs">
+              <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <input v-model="userKeyword" @keyup.enter="refreshUsers" placeholder="搜索昵称或邮箱..." class="w-full h-9 pl-9 pr-3 bg-white border border-[#ebebeb] rounded-xl text-sm focus:outline-none focus:border-zinc-300 transition-colors" />
             </div>
+            <button @click="refreshUsers" :disabled="tableLoading" class="px-3 py-1.5 text-xs text-zinc-600 bg-white border border-[#ebebeb] hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+              <RefreshCw :class="['w-3.5 h-3.5', tableLoading && 'animate-spin']" /> 刷新
+            </button>
+            <button @click="openCreateDialog" class="px-3 py-1.5 text-xs text-white bg-[#0a0a0a] hover:bg-zinc-700 rounded-lg transition-colors flex items-center gap-1.5">
+              <Plus class="w-3.5 h-3.5" /> 新增用户
+            </button>
           </div>
 
-          <div class="admin-summary">
-            <span>普通用户 {{ normalUserCount }} 个</span>
-            <span>当前管理员 ID：{{ currentAdminId || "-" }}</span>
+          <!-- Table -->
+          <div class="bg-white border border-[#ebebeb] rounded-xl overflow-hidden">
+            <table class="w-full">
+              <thead>
+                <tr class="border-b border-[#ebebeb] bg-zinc-50">
+                  <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">用户</th>
+                  <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">邮箱</th>
+                  <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">角色</th>
+                  <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase hidden sm:table-cell">创建时间</th>
+                  <th class="text-right px-4 py-3 text-xs font-medium text-zinc-500 uppercase">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="tableLoading">
+                  <td colspan="5" class="text-center py-12">
+                    <Loader2 class="w-5 h-5 text-zinc-300 animate-spin mx-auto" />
+                  </td>
+                </tr>
+                <tr v-else-if="!userRows.length">
+                  <td colspan="5" class="text-center py-12 text-sm text-zinc-400">暂无用户数据</td>
+                </tr>
+                <tr v-for="(row, idx) in userRows" :key="row.id" :class="['border-b border-zinc-50 last:border-0 hover:bg-zinc-50 transition-colors', idx % 2 === 0 ? 'bg-white' : 'bg-zinc-50/30']">
+                  <td class="px-4 py-3">
+                    <div class="flex items-center gap-2.5">
+                      <div class="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center text-xs font-medium text-zinc-600">{{ row.name?.charAt(0)?.toUpperCase() || '?' }}</div>
+                      <div>
+                        <p class="text-sm font-medium text-[#0a0a0a]">{{ row.name }}</p>
+                        <p class="text-[10px] text-zinc-400">{{ row.id }}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3 text-sm text-zinc-600">{{ row.email }}</td>
+                  <td class="px-4 py-3">
+                    <span :class="['inline-flex px-2 py-0.5 rounded-full text-xs font-medium', row.is_admin ? 'bg-amber-50 text-amber-700' : 'bg-zinc-100 text-zinc-600']">
+                      {{ row.is_admin ? '管理员' : '普通用户' }}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 text-sm text-zinc-500 hidden sm:table-cell">{{ formatDate(row.created_at) }}</td>
+                  <td class="px-4 py-3 text-right">
+                    <button @click="openEditDialog(row)" class="px-2.5 py-1 text-xs text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100 rounded-lg transition-colors">编辑</button>
+                    <button @click="removeUser(row)" :disabled="row.id === user?.id" class="px-2.5 py-1 text-xs text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-
-          <el-table v-loading="tableLoading" :data="userRows" stripe class="admin-table">
-            <el-table-column label="昵称" min-width="160">
-              <template #default="{ row }">
-                <div class="user-cell">
-                  <el-avatar :size="34" class="user-cell__avatar">
-                    {{ row.name?.slice(0, 1)?.toUpperCase() || "U" }}
-                  </el-avatar>
-                  <div>
-                    <strong>{{ row.name }}</strong>
-                    <div class="muted-copy">{{ row.id }}</div>
-                  </div>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column prop="email" label="邮箱" min-width="220" />
-            <el-table-column label="角色" width="120">
-              <template #default="{ row }">
-                <el-tag round effect="plain">{{ row.isAdmin ? "管理员" : "普通用户" }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="创建时间" min-width="180">
-              <template #default="{ row }">
-                {{ new Date(row.createdAt).toLocaleString("zh-CN") }}
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="180" fixed="right">
-              <template #default="{ row }">
-                <div class="user-actions">
-                  <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
-                  <el-button
-                    link
-                    :icon="Delete"
-                    :loading="deletingUserId === row.id"
-                    @click="removeUser(row)"
-                  >
-                    删除
-                  </el-button>
-                </div>
-              </template>
-            </el-table-column>
-          </el-table>
-        </section>
-      </section>
+        </div>
+      </div>
     </div>
 
-    <el-dialog
-      v-model="dialogVisible"
-      class="surface-form-dialog"
-      width="520px"
-      destroy-on-close
-    >
-      <template #header>
-        <DialogHeroHeader
-          :icon="formDialogMeta.icon"
-          :title="formDialogMeta.title"
-          :badge-text="formDialogMeta.badgeText"
-          :description="formDialogMeta.description"
-        />
-      </template>
-
-      <el-form ref="formRef" :model="form" :rules="formRules" label-position="top" class="panel-stack">
-        <el-form-item label="昵称" prop="name">
-          <el-input v-model="form.name" placeholder="请输入昵称" />
-        </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="form.email" placeholder="请输入邮箱" />
-        </el-form-item>
-        <el-form-item :label="formMode === 'create' ? '初始密码' : '重置密码'" prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            show-password
-            :placeholder="formMode === 'create' ? '至少 6 位' : '留空则不修改密码'"
-          />
-        </el-form-item>
-        <el-form-item label="角色">
-          <el-switch
-            v-model="form.is_admin"
-            inline-prompt
-            active-text="管理员"
-            inactive-text="普通"
-          />
-        </el-form-item>
-      </el-form>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="saving" @click="submitUserForm">保存</el-button>
+    <!-- Create/Edit modal -->
+    <div v-if="dialogVisible" class="fixed inset-0 z-[100] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="dialogVisible = false" />
+      <div class="relative bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4" style="animation: fade-in 0.2s ease-out, slide-up 0.2s ease-out;">
+        <button @click="dialogVisible = false" :disabled="saving" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"><X class="w-5 h-5" /></button>
+        <h3 class="text-lg font-semibold text-zinc-900 mb-4">{{ formMode === 'create' ? '创建用户' : '编辑用户' }}</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-zinc-700 mb-1">用户名</label>
+            <div class="relative">
+              <User class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <input v-model="form.name" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="用户名" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-700 mb-1">邮箱</label>
+            <div class="relative">
+              <Mail class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <input v-model="form.email" type="email" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="email@example.com" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-700 mb-1">{{ formMode === 'create' ? '密码' : '新密码（留空则不修改）' }}</label>
+            <div class="relative">
+              <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <input v-model="form.password" type="password" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" :placeholder="formMode === 'create' ? '至少6位' : '留空则不修改'" />
+            </div>
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input v-model="form.is_admin" type="checkbox" class="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500" />
+            <span class="text-sm text-zinc-700">管理员权限</span>
+          </label>
+          <div v-if="formError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs">
+            <AlertCircle class="w-3.5 h-3.5" /> {{ formError }}
+          </div>
+          <div class="flex gap-3 pt-2">
+            <button @click="dialogVisible = false" :disabled="saving" class="flex-1 h-10 border border-zinc-200 text-zinc-700 rounded-xl text-sm font-medium hover:bg-zinc-50 transition-colors">取消</button>
+            <button @click="submitUserForm" :disabled="saving" class="flex-1 h-10 bg-[#0a0a0a] text-white rounded-xl text-sm font-medium hover:bg-zinc-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-70">
+              <Loader2 v-if="saving" class="w-4 h-4 animate-spin" />
+              {{ saving ? '保存中...' : '保存' }}
+            </button>
+          </div>
         </div>
-      </template>
-    </el-dialog>
+      </div>
+    </div>
 
+    <!-- Delete confirm -->
     <DeleteConfirmDialog
       v-model="deleteDialogVisible"
       title="删除用户"
-      confirm-text="确认删除"
-      :loading="!!deletingUserId"
       :summary="userPendingDelete ? `确认删除用户「${userPendingDelete.name}」吗？` : ''"
-      hint="该用户的会话记录和独立知识库内容会一起清理。"
-      :items="userPendingDelete ? [{ id: userPendingDelete.id, name: `${userPendingDelete.name} · ${userPendingDelete.email}` }] : []"
-      extra="如果只是停用账号，建议先评估是否需要保留历史数据。"
+      hint="删除后，该用户的会话和知识库数据可能丢失。"
+      :items="userPendingDelete ? [{ id: userPendingDelete.id, name: userPendingDelete.name }] : []"
+      extra="此操作不可恢复。"
       @confirm="confirmDeleteUser"
     />
   </div>
 </template>
-
-<style scoped>
-.admin-page {
-  overflow: hidden;
-}
-
-.admin-toolbar__search {
-  max-width: 360px;
-}
-
-.admin-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-.user-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.user-cell strong {
-  display: block;
-}
-
-.user-cell__avatar {
-  background: linear-gradient(135deg, #1d54d8, #6ca3ff);
-  color: #fff;
-  font-weight: 800;
-}
-
-.user-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-
-:deep(.surface-form-dialog) {
-  width: min(520px, calc(100vw - 32px));
-  border-radius: 26px;
-  border: 1px solid rgba(31, 74, 160, 0.08);
-  box-shadow: 0 30px 72px rgba(31, 64, 128, 0.16);
-  overflow: hidden;
-}
-
-:deep(.surface-form-dialog .el-dialog__header) {
-  margin: 0;
-  padding: 22px 22px 0;
-}
-
-:deep(.surface-form-dialog .el-dialog__body) {
-  padding: 14px 22px 8px;
-}
-
-:deep(.surface-form-dialog .el-dialog__footer) {
-  padding: 8px 22px 22px;
-}
-
-@media (max-width: 1080px) {
-  .admin-page {
-    overflow: auto;
-  }
-
-  .panel-toolbar,
-  .admin-summary {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .admin-toolbar__search {
-    max-width: none;
-  }
-}
-</style>

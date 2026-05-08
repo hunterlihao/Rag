@@ -1,40 +1,20 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import {
-  EditPen,
-  Lock,
-  Monitor,
-  Setting,
-  UserFilled,
-} from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ArrowLeft, User, Mail, Lock, Loader2, AlertCircle, CheckCircle, Settings, Home, Keyboard, LayoutGrid, Eye } from "lucide-vue-next";
 
 import ActionBusyOverlay from "@/components/ActionBusyOverlay.vue";
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue";
-import { getCurrentUser, logout } from "@/services/auth";
+import { getCurrentUser, logout, replaceCurrentUser } from "@/services/auth";
 import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from "@/services/shell";
-import {
-  buildDefaultPreferences,
-  getPreferences,
-  normalizePreferences,
-  savePreferences,
-  updateMyPassword,
-  updateMyProfile,
-} from "@/services/user";
+import { buildDefaultPreferences, getPreferences, normalizePreferences, savePreferences, updateMyPassword, updateMyProfile } from "@/services/user";
 import { createSession, deleteSession, fetchSessions } from "@/services/workspace";
 
 const route = useRoute();
 const router = useRouter();
 const user = ref(getCurrentUser());
-const preferences = ref({
-  ...buildDefaultPreferences(),
-  ...getPreferences(user.value),
-});
-
-const workspace = reactive({
-  sessions: [],
-});
+const preferences = ref(getPreferences(user.value));
+const workspace = reactive({ sessions: [] });
 const pageLoading = ref(false);
 const profileLoading = ref(false);
 const passwordLoading = ref(false);
@@ -42,197 +22,123 @@ const preferenceLoading = ref(false);
 const deletingSessionId = ref("");
 const sessionSearch = ref("");
 const activeSessionId = ref("");
-const deleteBusyState = computed(() => ({
+const profileError = ref("");
+const profileSuccess = ref("");
+const passwordError = ref("");
+const passwordSuccess = ref("");
+
+const sidebarBusy = computed(() => !!deletingSessionId.value);
+const navItems = computed(() => buildSidebarNavItems(user.value));
+
+const filteredSessions = computed(() => {
+  const kw = sessionSearch.value.trim().toLowerCase();
+  return [...workspace.sessions]
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .filter((s) => !kw || `${s.title} ${s.preview || ""}`.toLowerCase().includes(kw));
+});
+
+const busyOverlayState = computed(() => ({
   visible: !!deletingSessionId.value,
   badgeText: "删除处理中",
   title: "正在删除会话",
-  description: "正在清理当前会话并同步刷新左侧历史列表，请稍候。",
-}));
-const navItems = computed(() => buildSidebarNavItems(user.value));
-const dashboardGridStyle = computed(() => ({
-  "--dashboard-sidebar-width": preferences.value.sidebarCollapsed ? "88px" : "320px",
+  description: "会话记录正在清理。",
 }));
 
-const profileForm = reactive({
-  name: user.value?.name || "",
-  email: user.value?.email || "",
+const profileForm = reactive({ name: "", email: "" });
+const passwordForm = reactive({ current_password: "", new_password: "", confirm_password: "" });
+
+const homeRouteOptions = computed(() => {
+  const opts = [
+    { value: "workspace", label: "问答主页" },
+    { value: "knowledge", label: "知识库管理" },
+    { value: "settings", label: "设置中心" },
+  ];
+  if (user.value?.isAdmin) opts.push({ value: "admin-users", label: "用户管理" });
+  return opts;
 });
 
-const passwordForm = reactive({
-  current_password: "",
-  new_password: "",
-  confirm_password: "",
+const effectiveHomeRoute = computed(() => {
+  const ids = homeRouteOptions.value.map((o) => o.value);
+  return ids.includes(preferences.value.homeRoute) ? preferences.value.homeRoute : "workspace";
 });
 
-const filteredSessions = computed(() => {
-  const keyword = sessionSearch.value.trim().toLowerCase();
-  return [...workspace.sessions]
-    .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))
-    .filter((session) => {
-      if (!keyword) {
-        return true;
-      }
-      return `${session.title} ${session.preview || ""}`.toLowerCase().includes(keyword);
-    });
+const effectiveHomeRouteLabel = computed(() => {
+  return homeRouteOptions.value.find((o) => o.value === effectiveHomeRoute.value)?.label || "问答主页";
 });
-
-async function refreshSessions() {
-  const sessionList = await fetchSessions();
-  workspace.sessions.splice(
-    0,
-    workspace.sessions.length,
-    ...sessionList.map((session) => normalizeShellSession(session)),
-  );
-  activeSessionId.value = workspace.sessions[0]?.id || "";
-}
 
 function syncProfileForm() {
   profileForm.name = user.value?.name || "";
   profileForm.email = user.value?.email || "";
 }
 
-async function createNewSession() {
-  const session = await createSession();
-  router.push(buildRouteLocation("workspace", session.id));
+async function refreshSessions() {
+  const list = await fetchSessions();
+  workspace.sessions = list.map((s) => ({ ...normalizeShellSession(s), welcomeMessage: "" }));
+  if (workspace.sessions.length) activeSessionId.value = workspace.sessions[0].id;
 }
 
-async function selectSession(sessionId) {
-  router.push(buildRouteLocation("workspace", sessionId));
+function navigateTo(name) { router.push(buildRouteLocation(name, activeSessionId.value)); }
+async function createNewSession() { const s = await createSession(); router.push(buildRouteLocation("workspace", s.id)); }
+function selectSession(id) { router.push(buildRouteLocation("workspace", id)); }
+async function handleDeleteSession(id) {
+  if (!id || sidebarBusy.value) return;
+  deletingSessionId.value = id;
+  try { await deleteSession(id); workspace.sessions = workspace.sessions.filter((s) => s.id !== id); } finally { deletingSessionId.value = ""; }
 }
-
-async function handleDeleteSession(sessionId) {
-  if (!sessionId || deletingSessionId.value) {
-    return;
-  }
-
-  deletingSessionId.value = sessionId;
-  try {
-    await deleteSession(sessionId);
-    await refreshSessions();
-    ElMessage.success("会话已删除");
-  } catch (error) {
-    ElMessage.error(error.message || "删除会话失败");
-  } finally {
-    deletingSessionId.value = "";
-  }
-}
-
-function navigateTo(name) {
-  router.push(buildRouteLocation(name, activeSessionId.value));
-}
-
-async function handleLogout() {
-  await logout();
-  router.push("/login");
-}
-
-function toggleSidebarCollapse() {
-  preferences.value = savePreferences(
-    {
-      ...preferences.value,
-      sidebarCollapsed: !preferences.value.sidebarCollapsed,
-    },
-    user.value,
-  );
-}
+async function handleLogout() { await logout(); router.push("/login"); }
+function toggleSidebarCollapse() { preferences.value = savePreferences({ ...preferences.value, sidebarCollapsed: !preferences.value.sidebarCollapsed }, user.value); }
 
 async function saveProfile() {
-  if (profileLoading.value) {
-    return;
-  }
-
+  profileError.value = ""; profileSuccess.value = "";
+  if (!profileForm.name.trim() || !profileForm.email.trim()) { profileError.value = "请填写完整的个人信息"; return; }
   profileLoading.value = true;
   try {
-    const result = await updateMyProfile({
-      name: profileForm.name,
-      email: profileForm.email,
-    });
-    user.value = getCurrentUser();
-    syncProfileForm();
-    ElMessage.success(result.message || "个人信息已更新");
-  } catch (error) {
-    ElMessage.error(error.message || "个人信息更新失败");
+    const result = await updateMyProfile({ name: profileForm.name, email: profileForm.email });
+    if (result.user) user.value = replaceCurrentUser(result.user);
+    profileSuccess.value = result.message || "个人信息已更新";
+    setTimeout(() => { profileSuccess.value = ""; }, 3000);
+  } catch (err) {
+    profileError.value = err.message || "保存失败";
   } finally {
     profileLoading.value = false;
   }
 }
 
 async function savePassword() {
-  if (passwordLoading.value) {
-    return;
-  }
-
-  if (!passwordForm.current_password || !passwordForm.new_password) {
-    ElMessage.warning("请先填写完整密码信息");
-    return;
-  }
-  if (passwordForm.new_password !== passwordForm.confirm_password) {
-    ElMessage.warning("两次输入的新密码不一致");
-    return;
-  }
-
+  passwordError.value = ""; passwordSuccess.value = "";
+  if (!passwordForm.current_password || !passwordForm.new_password) { passwordError.value = "请填写完整的密码信息"; return; }
+  if (passwordForm.new_password.length < 6) { passwordError.value = "新密码至少需要6位"; return; }
+  if (passwordForm.new_password !== passwordForm.confirm_password) { passwordError.value = "两次输入的密码不一致"; return; }
   passwordLoading.value = true;
   try {
-    await updateMyPassword({
+    const result = await updateMyPassword({
       current_password: passwordForm.current_password,
       new_password: passwordForm.new_password,
     });
-    ElMessage.success("密码已更新，请重新登录。");
-    await logout();
-    router.push("/login");
-  } catch (error) {
-    ElMessage.error(error.message || "密码更新失败");
+    passwordSuccess.value = result.message || "密码已更新，请重新登录。";
+    passwordForm.current_password = ""; passwordForm.new_password = ""; passwordForm.confirm_password = "";
+  } catch (err) {
+    passwordError.value = err.message || "修改失败";
   } finally {
     passwordLoading.value = false;
   }
 }
 
-async function saveUserPreferences() {
+function saveUserPreferences() {
   preferenceLoading.value = true;
-  try {
-    preferences.value = savePreferences(preferences.value, user.value);
-    ElMessage.success("个性化设置已保存");
-  } finally {
-    preferenceLoading.value = false;
-  }
+  preferences.value = savePreferences({ ...preferences.value }, user.value);
+  setTimeout(() => { preferenceLoading.value = false; }, 300);
 }
-
-const homeRouteOptions = computed(() => {
-  const options = [
-    { label: "问答主页", value: "workspace" },
-    { label: "知识库", value: "knowledge" },
-    { label: "设置中心", value: "settings" },
-  ];
-  if (user.value?.isAdmin) {
-    options.push({ label: "用户管理", value: "admin-users" });
-  }
-  return options;
-});
-
-const effectiveHomeRoute = computed(() => {
-  const routeName = String(preferences.value.homeRoute || "workspace").trim();
-  if (routeName === "admin-users" && !user.value?.isAdmin) {
-    return "workspace";
-  }
-  return routeName || "workspace";
-});
-
-const effectiveHomeRouteLabel = computed(() => {
-  return (
-    homeRouteOptions.value.find((item) => item.value === effectiveHomeRoute.value)?.label ||
-    "问答主页"
-  );
-});
 
 onMounted(async () => {
   pageLoading.value = true;
   try {
     user.value = getCurrentUser();
-    preferences.value = normalizePreferences(getPreferences(user.value), user.value);
+    preferences.value = getPreferences(user.value);
     syncProfileForm();
     await refreshSessions();
-  } catch (error) {
-    ElMessage.error(error.message || "设置页面加载失败");
+  } catch {
+    if (!getCurrentUser()) router.push("/login");
   } finally {
     pageLoading.value = false;
   }
@@ -240,225 +146,218 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-loading="pageLoading" class="page-shell settings-page">
-    <ActionBusyOverlay
-      :visible="deleteBusyState.visible"
-      :badge-text="deleteBusyState.badgeText"
-      :title="deleteBusyState.title"
-      :description="deleteBusyState.description"
+  <div class="flex h-screen bg-[#FAFAFA]">
+    <ActionBusyOverlay v-bind="busyOverlayState" />
+
+    <WorkspaceSidebar
+      :user="user"
+      :sessions="filteredSessions"
+      :nav-items="navItems"
+      :current-route-name="'settings'"
+      :active-session-id="activeSessionId"
+      :search-value="sessionSearch"
+      :busy="sidebarBusy"
+      :deleting-session-id="deletingSessionId"
+      :session-density="preferences.sessionDensity"
+      :collapsed="preferences.sidebarCollapsed"
+      @create-session="createNewSession"
+      @select-session="selectSession"
+      @delete-session="handleDeleteSession"
+      @navigate="navigateTo"
+      @toggle-collapse="toggleSidebarCollapse"
+      @update:search-value="sessionSearch = $event"
+      @logout="handleLogout"
     />
 
-    <div class="dashboard-grid" :style="dashboardGridStyle">
-      <WorkspaceSidebar
-        :user="user"
-        :sessions="filteredSessions"
-        :nav-items="navItems"
-        :current-route-name="String(route.name || '')"
-        :active-session-id="activeSessionId"
-        :search-value="sessionSearch"
-        :busy="profileLoading || passwordLoading || preferenceLoading"
-        :deleting-session-id="deletingSessionId"
-        :session-density="preferences.sessionDensity"
-        :collapsed="preferences.sidebarCollapsed"
-        @create-session="createNewSession"
-        @select-session="selectSession"
-        @delete-session="handleDeleteSession"
-        @navigate="navigateTo"
-        @toggle-collapse="toggleSidebarCollapse"
-        @update:search-value="sessionSearch = $event"
-        @logout="handleLogout"
-      />
+    <div class="flex-1 flex flex-col min-w-0">
+      <header class="h-12 bg-white border-b border-zinc-100 flex items-center px-6 shrink-0">
+        <button @click="router.push('/workspace')" class="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-700 transition-colors">
+          <ArrowLeft class="w-4 h-4" /> 返回
+        </button>
+        <span class="mx-3 text-zinc-300">/</span>
+        <span class="text-sm font-medium text-zinc-700">设置中心</span>
+      </header>
 
-      <section class="dashboard-stage">
-        <header class="dashboard-hero glass-panel">
-          <div class="dashboard-copy">
-            <div class="dashboard-eyebrow">设置中心</div>
-            <h1>统一维护账号信息、安全能力和工作习惯。</h1>
-            <p>
-              这里可以修改个人资料、更新登录密码，并保存默认首页、发送快捷键、会话密度等前端偏好。
-            </p>
-          </div>
-
-          <div class="dashboard-stats">
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><UserFilled /></el-icon>
-              </div>
-              <div class="info-tile__copy">
-                <strong>{{ user?.name || "-" }}</strong>
-                <span>{{ user?.isAdmin ? "管理员账号" : "普通账号" }}</span>
-              </div>
-            </div>
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><Monitor /></el-icon>
-              </div>
-              <div class="info-tile__copy">
-                <strong>{{ effectiveHomeRouteLabel }}</strong>
-                <span>当前默认首页</span>
-              </div>
-            </div>
-            <div class="info-tile">
-              <div class="info-tile__icon">
-                <el-icon><Setting /></el-icon>
-              </div>
-              <div class="info-tile__copy">
-                <strong>{{ preferences.sendShortcut === "enter" ? "Enter" : "Ctrl+Enter" }}</strong>
-                <span>当前发送快捷键</span>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <div class="panel-grid-2">
-          <section class="soft-card content-card panel-stack">
-            <div>
-              <div class="section-title">个人资料</div>
-              <div class="section-subtitle">同步更新你的昵称和邮箱。</div>
-            </div>
-            <el-form label-position="top" class="panel-stack">
-              <el-form-item label="昵称">
-                <el-input v-model="profileForm.name" placeholder="请输入昵称" />
-              </el-form-item>
-              <el-form-item label="邮箱">
-                <el-input v-model="profileForm.email" placeholder="请输入邮箱" />
-              </el-form-item>
-            </el-form>
-            <el-button type="primary" :icon="EditPen" :loading="profileLoading" @click="saveProfile">
-              保存资料
-            </el-button>
-          </section>
-
-          <section class="soft-card content-card panel-stack">
-            <div>
-              <div class="section-title">安全设置</div>
-              <div class="section-subtitle">更新密码后会立即要求重新登录。</div>
-            </div>
-            <el-form label-position="top" class="panel-stack">
-              <el-form-item label="当前密码">
-                <el-input v-model="passwordForm.current_password" type="password" show-password />
-              </el-form-item>
-              <el-form-item label="新密码">
-                <el-input v-model="passwordForm.new_password" type="password" show-password />
-              </el-form-item>
-              <el-form-item label="确认新密码">
-                <el-input v-model="passwordForm.confirm_password" type="password" show-password />
-              </el-form-item>
-            </el-form>
-            <el-button type="primary" :icon="Lock" :loading="passwordLoading" @click="savePassword">
-              更新密码
-            </el-button>
-          </section>
+      <div class="flex-1 overflow-y-auto">
+        <div v-if="pageLoading" class="flex items-center justify-center h-full">
+          <Loader2 class="w-6 h-6 text-zinc-300 animate-spin" />
         </div>
 
-        <section class="soft-card content-card panel-stack">
+        <div v-else class="max-w-3xl mx-auto px-6 py-6 space-y-6">
+          <!-- Hero -->
           <div>
-            <div class="section-title">偏好设置</div>
-            <div class="section-subtitle">这些配置会保存在浏览器本地，并立即作用到前端页面。</div>
+            <span class="inline-flex items-center px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-3">设置中心</span>
+            <h1 class="text-xl font-bold text-[#0a0a0a] tracking-tight mb-1">个人设置与偏好</h1>
+            <p class="text-sm text-zinc-500">修改资料、密码和个性化工作台偏好。</p>
           </div>
 
-          <div class="panel-grid-2">
-            <el-form label-position="top" class="panel-stack">
-              <el-form-item label="默认首页">
-                <el-select v-model="preferences.homeRoute">
-                  <el-option
-                    v-for="item in homeRouteOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="发送快捷键">
-                <el-radio-group v-model="preferences.sendShortcut">
-                  <el-radio-button label="enter">Enter 发送</el-radio-button>
-                  <el-radio-button label="ctrl-enter">Ctrl+Enter 发送</el-radio-button>
-                </el-radio-group>
-              </el-form-item>
-            </el-form>
-
-            <el-form label-position="top" class="panel-stack">
-              <el-form-item label="会话列表密度">
-                <el-radio-group v-model="preferences.sessionDensity">
-                  <el-radio-button label="comfy">舒展</el-radio-button>
-                  <el-radio-button label="compact">紧凑</el-radio-button>
-                </el-radio-group>
-              </el-form-item>
-              <el-form-item label="知识库提示语">
-                <el-switch
-                  v-model="preferences.showKnowledgeTips"
-                  inline-prompt
-                  active-text="显示"
-                  inactive-text="隐藏"
-                />
-              </el-form-item>
-            </el-form>
-          </div>
-
-          <div class="settings-preview">
-            <div class="settings-preview__item">
-              <span>默认进入</span>
-              <strong>{{ effectiveHomeRouteLabel }}</strong>
+          <!-- Info tiles -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4">
+              <div class="flex items-center gap-2 mb-1">
+                <User class="w-3.5 h-3.5 text-zinc-400" />
+                <span class="text-[11px] text-zinc-400">用户</span>
+              </div>
+              <p class="text-sm font-semibold text-[#0a0a0a]">{{ user?.name || '—' }}</p>
+              <p class="text-[11px] text-zinc-400">{{ user?.isAdmin ? '管理员' : '普通用户' }}</p>
             </div>
-            <div class="settings-preview__item">
-              <span>发送方式</span>
-              <strong>{{ preferences.sendShortcut === "enter" ? "Enter" : "Ctrl+Enter" }}</strong>
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4">
+              <div class="flex items-center gap-2 mb-1">
+                <Home class="w-3.5 h-3.5 text-zinc-400" />
+                <span class="text-[11px] text-zinc-400">首页路由</span>
+              </div>
+              <p class="text-sm font-semibold text-[#0a0a0a]">{{ effectiveHomeRouteLabel }}</p>
             </div>
-            <div class="settings-preview__item">
-              <span>会话密度</span>
-              <strong>{{ preferences.sessionDensity === "compact" ? "紧凑" : "舒展" }}</strong>
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-4">
+              <div class="flex items-center gap-2 mb-1">
+                <Keyboard class="w-3.5 h-3.5 text-zinc-400" />
+                <span class="text-[11px] text-zinc-400">发送方式</span>
+              </div>
+              <p class="text-sm font-semibold text-[#0a0a0a]">{{ preferences.sendShortcut === 'ctrl-enter' ? 'Ctrl+Enter 发送' : 'Enter 发送' }}</p>
             </div>
           </div>
 
-          <el-button type="primary" :loading="preferenceLoading" @click="saveUserPreferences">
-            保存偏好设置
-          </el-button>
-        </section>
-      </section>
+          <!-- Profile + Password -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Profile -->
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-6">
+              <h2 class="text-sm font-semibold text-[#0a0a0a] mb-4">个人资料</h2>
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-xs font-medium text-zinc-600 mb-1">用户名</label>
+                  <div class="relative">
+                    <User class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input v-model="profileForm.name" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="用户名" />
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-zinc-600 mb-1">邮箱</label>
+                  <div class="relative">
+                    <Mail class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input v-model="profileForm.email" type="email" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="email@example.com" />
+                  </div>
+                </div>
+                <div v-if="profileError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs"><AlertCircle class="w-3.5 h-3.5" /> {{ profileError }}</div>
+                <div v-if="profileSuccess" class="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg text-xs"><CheckCircle class="w-3.5 h-3.5" /> {{ profileSuccess }}</div>
+                <button @click="saveProfile" :disabled="profileLoading" class="px-4 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+                  <Loader2 v-if="profileLoading" class="w-3.5 h-3.5 animate-spin" /> 保存资料
+                </button>
+              </div>
+            </div>
+
+            <!-- Password -->
+            <div class="bg-white border border-[#ebebeb] rounded-xl p-6">
+              <h2 class="text-sm font-semibold text-[#0a0a0a] mb-4">安全设置</h2>
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-xs font-medium text-zinc-600 mb-1">当前密码</label>
+                  <div class="relative">
+                    <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input v-model="passwordForm.current_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="当前密码" />
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-zinc-600 mb-1">新密码</label>
+                  <div class="relative">
+                    <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input v-model="passwordForm.new_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="新密码（至少6位）" />
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-zinc-600 mb-1">确认新密码</label>
+                  <div class="relative">
+                    <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input v-model="passwordForm.confirm_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="再次输入新密码" />
+                  </div>
+                </div>
+                <div v-if="passwordError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs"><AlertCircle class="w-3.5 h-3.5" /> {{ passwordError }}</div>
+                <div v-if="passwordSuccess" class="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg text-xs"><CheckCircle class="w-3.5 h-3.5" /> {{ passwordSuccess }}</div>
+                <button @click="savePassword" :disabled="passwordLoading" class="px-4 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+                  <Loader2 v-if="passwordLoading" class="w-3.5 h-3.5 animate-spin" /> 更新密码
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Preferences -->
+          <div class="bg-white border border-[#ebebeb] rounded-xl p-6">
+            <h2 class="text-sm font-semibold text-[#0a0a0a] mb-4">工作台偏好</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <!-- Home route -->
+              <div>
+                <label class="block text-xs font-medium text-zinc-600 mb-2">默认首页</label>
+                <select
+                  :value="effectiveHomeRoute"
+                  @change="preferences.homeRoute = ($event.target).value"
+                  class="w-full h-9 px-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                >
+                  <option v-for="opt in homeRouteOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+              </div>
+
+              <!-- Send shortcut -->
+              <div>
+                <label class="block text-xs font-medium text-zinc-600 mb-2">发送快捷键</label>
+                <div class="flex gap-3">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input v-model="preferences.sendShortcut" type="radio" value="enter" class="w-4 h-4 text-blue-600" />
+                    <span class="text-sm text-zinc-700">Enter 发送</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input v-model="preferences.sendShortcut" type="radio" value="ctrl-enter" class="w-4 h-4 text-blue-600" />
+                    <span class="text-sm text-zinc-700">Ctrl+Enter 发送</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Session density -->
+              <div>
+                <label class="block text-xs font-medium text-zinc-600 mb-2">会话列表密度</label>
+                <div class="flex gap-3">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input v-model="preferences.sessionDensity" type="radio" value="comfy" class="w-4 h-4 text-blue-600" />
+                    <span class="text-sm text-zinc-700">舒展</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input v-model="preferences.sessionDensity" type="radio" value="compact" class="w-4 h-4 text-blue-600" />
+                    <span class="text-sm text-zinc-700">紧凑</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Knowledge tips toggle -->
+              <div>
+                <label class="block text-xs font-medium text-zinc-600 mb-2">知识库提示语</label>
+                <div class="flex gap-3">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input v-model="preferences.showKnowledgeTips" type="radio" :value="true" class="w-4 h-4 text-blue-600" />
+                    <span class="text-sm text-zinc-700">显示</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input v-model="preferences.showKnowledgeTips" type="radio" :value="false" class="w-4 h-4 text-blue-600" />
+                    <span class="text-sm text-zinc-700">隐藏</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Preview -->
+            <div class="mt-4 pt-4 border-t border-zinc-100">
+              <span class="text-xs text-zinc-400">当前设置预览</span>
+              <div class="flex flex-wrap gap-2 mt-2">
+                <span class="px-2.5 py-1 bg-zinc-100 rounded-full text-xs text-zinc-600">首页：{{ effectiveHomeRouteLabel }}</span>
+                <span class="px-2.5 py-1 bg-zinc-100 rounded-full text-xs text-zinc-600">发送：{{ preferences.sendShortcut === 'ctrl-enter' ? 'Ctrl+Enter' : 'Enter' }}</span>
+                <span class="px-2.5 py-1 bg-zinc-100 rounded-full text-xs text-zinc-600">密度：{{ preferences.sessionDensity === 'compact' ? '紧凑' : '舒展' }}</span>
+                <span class="px-2.5 py-1 bg-zinc-100 rounded-full text-xs text-zinc-600">提示：{{ preferences.showKnowledgeTips ? '开' : '关' }}</span>
+              </div>
+            </div>
+
+            <button @click="saveUserPreferences" :disabled="preferenceLoading" class="mt-4 px-4 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+              <Loader2 v-if="preferenceLoading" class="w-3.5 h-3.5 animate-spin" /> 保存偏好设置
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.settings-page {
-  overflow: hidden;
-}
-
-.settings-preview {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.settings-preview__item {
-  padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid var(--line);
-  background: rgba(247, 250, 255, 0.92);
-}
-
-.settings-preview__item span,
-.settings-preview__item strong {
-  display: block;
-}
-
-.settings-preview__item span {
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.settings-preview__item strong {
-  margin-top: 6px;
-  font-size: 0.95rem;
-}
-
-@media (max-width: 1080px) {
-  .settings-page {
-    overflow: auto;
-  }
-
-  .settings-preview {
-    grid-template-columns: 1fr;
-  }
-}
-</style>
