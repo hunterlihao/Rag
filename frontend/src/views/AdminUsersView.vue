@@ -179,7 +179,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-screen bg-[#FAFAFA]">
+  <div class="flex h-screen bg-zinc-50">
     <ActionBusyOverlay v-bind="busyOverlayState" />
 
     <WorkspaceSidebar
@@ -220,36 +220,36 @@ onMounted(async () => {
           <!-- Hero -->
           <div>
             <span class="inline-flex items-center px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-3">管理员控制台</span>
-            <h1 class="text-xl font-bold text-[#0a0a0a] tracking-tight mb-1">系统用户管理</h1>
+            <h1 class="text-xl font-bold text-zinc-900 tracking-tight mb-1">系统用户管理</h1>
             <p class="text-sm text-zinc-500">管理员可维护系统用户与权限，当前管理员工号：{{ currentAdminId || '—' }}</p>
           </div>
 
           <!-- Info tiles -->
           <div class="grid grid-cols-3 gap-3">
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4 flex items-center gap-3">
               <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
                 <Users class="w-4 h-4 text-zinc-500" />
               </div>
               <div>
-                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ userRows.length }}</p>
+                <p class="text-lg font-bold text-zinc-900 numeric">{{ userRows.length }}</p>
                 <p class="text-xs text-zinc-400">总用户数</p>
               </div>
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4 flex items-center gap-3">
               <div class="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
                 <Shield class="w-4 h-4 text-amber-600" />
               </div>
               <div>
-                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ adminCount }}</p>
+                <p class="text-lg font-bold text-zinc-900 numeric">{{ adminCount }}</p>
                 <p class="text-xs text-zinc-400">管理员 / {{ normalUserCount }} 普通</p>
               </div>
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4 flex items-center gap-3">
               <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center">
                 <UserCheck class="w-4 h-4 text-emerald-600" />
               </div>
               <div>
-                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ todayCreatedCount }}</p>
+                <p class="text-lg font-bold text-zinc-900 numeric">{{ todayCreatedCount }}</p>
                 <p class="text-xs text-zinc-400">今日新增</p>
               </div>
             </div>
@@ -259,21 +259,21 @@ onMounted(async () => {
           <div class="flex items-center gap-2">
             <div class="relative flex-1 max-w-xs">
               <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-              <input v-model="userKeyword" @keyup.enter="refreshUsers" placeholder="搜索昵称或邮箱..." class="w-full h-9 pl-9 pr-3 bg-white border border-[#ebebeb] rounded-xl text-sm focus:outline-none focus:border-zinc-300 transition-colors" />
+              <input v-model="userKeyword" @keyup.enter="refreshUsers" placeholder="搜索昵称或邮箱..." class="w-full h-9 pl-9 pr-3 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:border-zinc-300 transition-colors" />
             </div>
-            <button @click="refreshUsers" :disabled="tableLoading" class="px-3 py-1.5 text-xs text-zinc-600 bg-white border border-[#ebebeb] hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+            <button @click="refreshUsers" :disabled="tableLoading" class="px-3 py-1.5 text-xs text-zinc-600 bg-white border border-zinc-200 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
               <RefreshCw :class="['w-3.5 h-3.5', tableLoading && 'animate-spin']" /> 刷新
             </button>
-            <button @click="openCreateDialog" class="px-3 py-1.5 text-xs text-white bg-[#0a0a0a] hover:bg-zinc-700 rounded-lg transition-colors flex items-center gap-1.5">
+            <button @click="openCreateDialog" class="px-3 py-1.5 text-xs text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg transition-colors flex items-center gap-1.5">
               <Plus class="w-3.5 h-3.5" /> 新增用户
             </button>
           </div>
 
           <!-- Table -->
-          <div class="bg-white border border-[#ebebeb] rounded-xl overflow-hidden">
+          <div class="bg-white border border-zinc-200 rounded-xl overflow-hidden">
             <table class="w-full">
               <thead>
-                <tr class="border-b border-[#ebebeb] bg-zinc-50">
+                <tr class="border-b border-zinc-200 bg-zinc-50">
                   <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">用户</th>
                   <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">邮箱</th>
                   <th class="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">角色</th>
@@ -295,7 +295,7 @@ onMounted(async () => {
                     <div class="flex items-center gap-2.5">
                       <div class="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center text-xs font-medium text-zinc-600">{{ row.name?.charAt(0)?.toUpperCase() || '?' }}</div>
                       <div>
-                        <p class="text-sm font-medium text-[#0a0a0a]">{{ row.name }}</p>
+                        <p class="text-sm font-medium text-zinc-900">{{ row.name }}</p>
                         <p class="text-[10px] text-zinc-400">{{ row.id }}</p>
                       </div>
                     </div>
@@ -330,25 +330,25 @@ onMounted(async () => {
             <label class="block text-sm font-medium text-zinc-700 mb-1">用户名</label>
             <div class="relative">
               <User class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-              <input v-model="form.name" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="用户名" />
+              <input v-model="form.name" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="用户名" />
             </div>
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-700 mb-1">邮箱</label>
             <div class="relative">
               <Mail class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-              <input v-model="form.email" type="email" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="email@example.com" />
+              <input v-model="form.email" type="email" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="email@example.com" />
             </div>
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-700 mb-1">{{ formMode === 'create' ? '密码' : '新密码（留空则不修改）' }}</label>
             <div class="relative">
               <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-              <input v-model="form.password" type="password" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" :placeholder="formMode === 'create' ? '至少6位' : '留空则不修改'" />
+              <input v-model="form.password" type="password" class="w-full h-10 pl-10 pr-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" :placeholder="formMode === 'create' ? '至少6位' : '留空则不修改'" />
             </div>
           </div>
           <label class="flex items-center gap-2 cursor-pointer">
-            <input v-model="form.is_admin" type="checkbox" class="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500" />
+            <input v-model="form.is_admin" type="checkbox" class="w-4 h-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900" />
             <span class="text-sm text-zinc-700">管理员权限</span>
           </label>
           <div v-if="formError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs">
@@ -356,7 +356,7 @@ onMounted(async () => {
           </div>
           <div class="flex gap-3 pt-2">
             <button @click="dialogVisible = false" :disabled="saving" class="flex-1 h-10 border border-zinc-200 text-zinc-700 rounded-xl text-sm font-medium hover:bg-zinc-50 transition-colors">取消</button>
-            <button @click="submitUserForm" :disabled="saving" class="flex-1 h-10 bg-[#0a0a0a] text-white rounded-xl text-sm font-medium hover:bg-zinc-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-70">
+            <button @click="submitUserForm" :disabled="saving" class="flex-1 h-10 bg-zinc-900 text-white rounded-xl text-sm font-medium hover:bg-zinc-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-70">
               <Loader2 v-if="saving" class="w-4 h-4 animate-spin" />
               {{ saving ? '保存中...' : '保存' }}
             </button>

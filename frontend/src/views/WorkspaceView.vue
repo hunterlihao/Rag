@@ -278,7 +278,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-screen bg-[#FAFAFA]">
+  <div class="flex h-screen bg-zinc-50">
     <ActionBusyOverlay
       :visible="deleteBusyState.visible"
       :badge-text="deleteBusyState.badgeText"

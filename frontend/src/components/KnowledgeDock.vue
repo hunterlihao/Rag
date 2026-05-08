@@ -130,7 +130,7 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
           v-if="draftFiles.length"
           @click="handleImport"
           :disabled="!canImport"
-          class="px-3 py-1.5 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors disabled:opacity-50 flex items-center gap-1"
+          class="px-3 py-1.5 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors disabled:opacity-50 flex items-center gap-1"
         >
           <Upload class="w-3 h-3" /> 导入到知识库
         </button>
@@ -139,7 +139,7 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
       <!-- Drop zone -->
       <div
         @dragenter="onDragEnter" @dragleave="onDragLeave" @dragover="onDragOver" @drop="onDrop"
-        :class="['border-2 border-dashed rounded-xl p-4 text-center transition-colors cursor-pointer', dragOver ? 'border-[#0a0a0a] bg-zinc-50' : 'border-zinc-200 hover:border-zinc-300 bg-zinc-50/50']"
+        :class="['border-2 border-dashed rounded-xl p-4 text-center transition-colors cursor-pointer', dragOver ? 'border-zinc-900 bg-zinc-50' : 'border-zinc-200 hover:border-zinc-300 bg-zinc-50/50']"
         @click="$refs.fileInput.click()"
       >
         <Upload class="w-6 h-6 text-zinc-400 mx-auto mb-2" />
@@ -168,7 +168,7 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
           <div class="flex items-center gap-2">
             <div class="flex-1 h-1.5 bg-zinc-100 rounded-full overflow-hidden">
               <div
-                :class="['h-full rounded-full transition-all duration-300', task.status === 'success' ? 'bg-emerald-500' : task.status === 'error' ? 'bg-red-400' : 'bg-[#0a0a0a]']"
+                :class="['h-full rounded-full transition-all duration-300', task.status === 'success' ? 'bg-emerald-500' : task.status === 'error' ? 'bg-red-400' : 'bg-zinc-900']"
                 :style="{ width: `${task.progress || 0}%` }"
               />
             </div>
@@ -200,7 +200,7 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
           />
         </div>
         <label v-if="pageMode" class="flex items-center gap-1 text-xs text-zinc-500 cursor-pointer select-none shrink-0">
-          <input type="checkbox" :checked="allUploadsSelected" @change="toggleSelectAll" class="w-3.5 h-3.5 rounded border-zinc-300 text-[#0a0a0a]" />
+          <input type="checkbox" :checked="allUploadsSelected" @change="toggleSelectAll" class="w-3.5 h-3.5 rounded border-zinc-300 text-zinc-900" />
           全选
         </label>
         <button
@@ -223,7 +223,7 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
 
         <div
           v-for="upload in uploads" :key="upload.id"
-          :class="['group relative bg-white border rounded-xl transition-all', pageMode ? 'p-3' : 'flex items-center gap-2 px-3 py-2', selectedUploadIds.includes(upload.id) ? 'border-[#0a0a0a] bg-zinc-50' : 'border-zinc-100 hover:border-zinc-300']"
+          :class="['group relative bg-white border rounded-xl transition-all', pageMode ? 'p-3' : 'flex items-center gap-2 px-3 py-2', selectedUploadIds.includes(upload.id) ? 'border-zinc-900 bg-zinc-50' : 'border-zinc-100 hover:border-zinc-300']"
         >
           <!-- Checkbox (pageMode: top-left) -->
           <input
@@ -231,7 +231,7 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
             type="checkbox"
             :checked="selectedUploadIds.includes(upload.id)"
             @change="toggleUpload(upload, $event.target.checked)"
-            class="absolute top-2.5 left-2.5 w-3.5 h-3.5 rounded border-zinc-300 text-[#0a0a0a] z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+            class="absolute top-2.5 left-2.5 w-3.5 h-3.5 rounded border-zinc-300 text-zinc-900 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
             :class="{ 'opacity-100': selectedUploadIds.includes(upload.id) }"
           />
 

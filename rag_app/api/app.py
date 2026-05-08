@@ -79,6 +79,22 @@ class LoginRequest(ApiRequestModel):
         return normalize_email(value)
 
 
+class ForgotPasswordRequest(ApiRequestModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    email: str = Field(..., min_length=3, max_length=255)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return normalize_required_text(value, "用户名")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+
 class ProfileUpdateRequest(ApiRequestModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., min_length=3, max_length=255)
@@ -577,6 +593,48 @@ def create_app() -> FastAPI:
         return {
             "message": f"{user.name} 已退出登录。",
         }
+
+    @app.post("/api/auth/forgot-password")
+    def forgot_password(
+        payload: ForgotPasswordRequest,
+        request: Request,
+        database: Session = Depends(get_db),
+    ):
+        client_host = auth_service.resolve_client_host(request)
+        forgot_allowed, retry_after_seconds = auth_service.register_rate_limit_status(client_host)
+        if not forgot_allowed:
+            build_error(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                f"操作过于频繁，请在 {retry_after_seconds or config.REGISTER_RATE_LIMIT_WINDOW_SECONDS} 秒后重试。",
+            )
+
+        user = auth_service.find_user_by_email(database, payload.email)
+        if user is None:
+            auth_service.record_register_attempt(client_host)
+            logger.warning(
+                "Password reset failed: email not found.",
+                extra={"event": "auth.forgot_password.failed", "email_hash": hashlib.sha256(payload.email.encode("utf-8")).hexdigest()[:12]},
+            )
+            build_error(status.HTTP_400_BAD_REQUEST, "用户名或邮箱不匹配，请检查后重试。")
+
+        if user.name.strip() != payload.name.strip():
+            auth_service.record_register_attempt(client_host)
+            logger.warning(
+                "Password reset failed: name mismatch.",
+                extra={"event": "auth.forgot_password.failed", "user_id": user.id},
+            )
+            build_error(status.HTTP_400_BAD_REQUEST, "用户名或邮箱不匹配，请检查后重试。")
+
+        if len(payload.new_password) < 6:
+            build_error(status.HTTP_400_BAD_REQUEST, "新密码至少需要 6 位。")
+
+        user.password_hash = auth_service.hash_password(payload.new_password)
+        user_service.bump_token_version(user)
+        database.add(user)
+        database.commit()
+
+        logger.info("Password reset succeeded.", extra={"event": "auth.forgot_password.succeeded", "user_id": user.id})
+        return {"message": "密码重置成功，请使用新密码登录。"}
 
     @app.get("/api/auth/me")
     def me(user=Depends(get_current_user)):

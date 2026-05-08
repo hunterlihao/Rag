@@ -330,7 +330,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-screen bg-[#FAFAFA]">
+  <div class="flex h-screen bg-zinc-50">
     <ActionBusyOverlay v-bind="busyOverlayState" />
 
     <WorkspaceSidebar
@@ -373,22 +373,22 @@ onMounted(async () => {
           <!-- Hero -->
           <div>
             <span class="inline-flex items-center px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-3">独立知识库</span>
-            <h1 class="text-xl font-bold text-[#0a0a0a] tracking-tight mb-1">知识库文档管理</h1>
+            <h1 class="text-xl font-bold text-zinc-900 tracking-tight mb-1">知识库文档管理</h1>
             <p class="text-sm text-zinc-500">独立导入文件并维护当前账号向量库。支持 PDF、Word、Excel、CSV、Markdown、TXT 格式。</p>
           </div>
 
           <!-- Info tiles -->
           <div class="grid grid-cols-3 gap-3">
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4 flex items-center gap-3">
               <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
                 <Files class="w-4 h-4 text-zinc-500" />
               </div>
               <div>
-                <p class="text-lg font-bold text-[#0a0a0a] numeric">{{ workspace.uploads.length }}</p>
+                <p class="text-lg font-bold text-zinc-900 numeric">{{ workspace.uploads.length }}</p>
                 <p class="text-xs text-zinc-400">文件总数</p>
               </div>
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4 flex items-center gap-3">
               <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
                 <Upload class="w-4 h-4 text-zinc-500" />
               </div>
@@ -397,19 +397,19 @@ onMounted(async () => {
                 <p class="text-xs text-zinc-400">最近活动</p>
               </div>
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4 flex items-center gap-3">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4 flex items-center gap-3">
               <div class="w-9 h-9 rounded-lg bg-zinc-100 flex items-center justify-center">
                 <ArrowLeft class="w-4 h-4 text-zinc-500" />
               </div>
               <div>
                 <p class="text-sm font-medium text-zinc-700">返回当前问答</p>
-                <button @click="openWorkspace()" class="text-xs text-blue-600 hover:underline mt-0.5">返回问答</button>
+                <button @click="openWorkspace()" class="text-xs text-zinc-900 hover:underline mt-0.5">返回问答</button>
               </div>
             </div>
           </div>
 
           <!-- KnowledgeDock -->
-          <div class="bg-white border border-[#ebebeb] rounded-xl overflow-hidden min-h-[400px] flex flex-col">
+          <div class="bg-white border border-zinc-200 rounded-xl overflow-hidden min-h-[400px] flex flex-col">
             <KnowledgeDock
               :busy="importBusy"
               :upload-tasks="uploadTasks"

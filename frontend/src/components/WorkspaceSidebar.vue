@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import {
   MessageCircle, Database, Settings, Shield, Plus, Clock, Trash2,
   PanelLeftOpen, PanelLeftClose, LogOut, Menu, X, Search, Loader2,
+  Sparkles, ChevronUp,
 } from "lucide-vue-next";
 import { formatRelativeTime } from "@/services/workspace";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
@@ -29,6 +30,7 @@ const deleteTarget = ref(null);
 const showDeleteConfirm = ref(false);
 const showLogoutConfirm = ref(false);
 const mobileOpen = ref(false);
+const showUserMenu = ref(false);
 
 const userInitial = computed(() => (props.user?.name || "U").slice(0, 1).toUpperCase());
 const isDense = computed(() => props.sessionDensity === "compact");
@@ -49,8 +51,12 @@ function confirmDelete() {
   emit("delete-session", deleteTarget.value.id);
   showDeleteConfirm.value = false; deleteTarget.value = null;
 }
-function confirmLogout() { showLogoutConfirm.value = false; emit("logout"); }
-function handleNav(name) { mobileOpen.value = false; emit("navigate", name); }
+function confirmLogout() { showLogoutConfirm.value = false; showUserMenu.value = false; emit("logout"); }
+function openLogoutConfirm() { showUserMenu.value = false; showLogoutConfirm.value = true; }
+function toggleUserMenu() { showUserMenu.value = !showUserMenu.value; }
+function goSettings() { showUserMenu.value = false; emit("navigate", "settings"); }
+function goHome() { mobileOpen.value = false; emit("navigate", "workspace"); }
+function handleNav(name) { mobileOpen.value = false; showUserMenu.value = false; emit("navigate", name); }
 function handleSelectSession(id) { mobileOpen.value = false; emit("select-session", id); }
 function onSearchInput(e) { emit("update:search-value", e.target.value); }
 </script>
@@ -68,10 +74,12 @@ function onSearchInput(e) { emit("update:search-value", e.target.value); }
   <aside :class="['md:hidden fixed top-0 left-0 z-50 h-full transition-transform duration-300 bg-white border-r border-zinc-100 flex flex-col w-64', mobileOpen ? 'translate-x-0' : '-translate-x-full']">
     <button @click="mobileOpen = false" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-zinc-900 z-10"><X class="w-5 h-5" /></button>
     <div class="px-4 py-6 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 bg-zinc-900 rounded-xl flex items-center justify-center text-white font-bold text-sm">{{ userInitial }}</div>
+      <button @click="goHome" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
+        <div class="w-9 h-9 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/25">
+          <Sparkles class="w-5 h-5 text-white" />
+        </div>
         <span class="text-sm font-semibold text-zinc-900 tracking-tight">RAG Studio</span>
-      </div>
+      </button>
       <button @click="emit('toggle-collapse')" class="p-1.5 hover:bg-zinc-100 rounded-lg transition-colors">
         <PanelLeftClose class="w-4 h-4 text-zinc-400" />
       </button>
@@ -115,20 +123,44 @@ function onSearchInput(e) { emit("update:search-value", e.target.value); }
         <div v-if="!sessions.length" class="text-center text-xs text-zinc-400 py-8">暂无历史对话</div>
       </div>
     </div>
-    <div class="border-t border-zinc-100 p-4">
-      <div class="text-xs text-zinc-600 truncate mb-0.5">{{ user.email }}</div>
-      <div class="text-xs text-zinc-400 mb-3">{{ user.isAdmin ? '管理员' : '普通用户' }}</div>
-      <button @click="showLogoutConfirm = true" :disabled="busy" class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-colors"><LogOut class="w-4 h-4" /> 退出登录</button>
+    <!-- User area with popup -->
+    <div class="border-t border-zinc-100 p-3 relative">
+      <button @click="toggleUserMenu" class="w-full flex items-center gap-3 px-2 py-2 hover:bg-zinc-50 rounded-xl transition-colors">
+        <div class="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center text-xs font-semibold text-zinc-600 shrink-0">
+          {{ userInitial }}
+        </div>
+        <div class="flex-1 text-left min-w-0">
+          <div class="text-xs font-medium text-zinc-700 truncate">{{ user.name }}</div>
+          <div class="text-[10px] text-zinc-400 truncate">{{ user.email }}</div>
+        </div>
+        <ChevronUp :class="['w-4 h-4 text-zinc-400 transition-transform', showUserMenu && 'rotate-180']" />
+      </button>
+
+      <!-- User popup menu -->
+      <div v-if="showUserMenu" class="absolute bottom-full left-3 right-3 mb-2 bg-white rounded-xl shadow-lg border border-zinc-200 overflow-hidden z-50">
+        <div class="px-3 py-2.5 border-b border-zinc-100">
+          <div class="text-xs font-medium text-zinc-700">{{ user.name }}</div>
+          <div class="text-[10px] text-zinc-400">{{ user.isAdmin ? '管理员' : '普通用户' }}</div>
+        </div>
+        <button @click="goSettings" class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-zinc-600 hover:bg-zinc-50 transition-colors">
+          <Settings class="w-4 h-4 text-zinc-400" /> 设置中心
+        </button>
+        <button @click="openLogoutConfirm" class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">
+          <LogOut class="w-4 h-4" /> 退出登录
+        </button>
+      </div>
     </div>
   </aside>
 
   <!-- ===== Desktop sidebar ===== -->
   <aside class="hidden md:flex flex-col h-full bg-white border-r border-zinc-100 w-64 shrink-0 transition-[margin-left] duration-300" :class="{ '-ml-64': collapsed }">
     <div class="px-4 py-6 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 bg-zinc-900 rounded-xl flex items-center justify-center text-white font-bold text-sm">{{ userInitial }}</div>
+      <button @click="goHome" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
+        <div class="w-9 h-9 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/25">
+          <Sparkles class="w-5 h-5 text-white" />
+        </div>
         <span class="text-sm font-semibold text-zinc-900 tracking-tight">RAG Studio</span>
-      </div>
+      </button>
       <button @click="emit('toggle-collapse')" class="p-1.5 hover:bg-zinc-100 rounded-lg transition-colors" title="隐藏侧边栏">
         <PanelLeftClose class="w-4 h-4 text-zinc-400" />
       </button>
@@ -176,10 +208,32 @@ function onSearchInput(e) { emit("update:search-value", e.target.value); }
       </div>
     </div>
 
-    <div class="border-t border-zinc-100 p-4">
-      <div class="text-xs text-zinc-600 truncate mb-0.5">{{ user.email }}</div>
-      <div class="text-xs text-zinc-400 mb-3">{{ user.isAdmin ? '管理员' : '普通用户' }}</div>
-      <button @click="showLogoutConfirm = true" :disabled="busy" class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-colors"><LogOut class="w-4 h-4" /> 退出登录</button>
+    <!-- User area with popup -->
+    <div class="border-t border-zinc-100 p-3 relative">
+      <button @click="toggleUserMenu" class="w-full flex items-center gap-3 px-2 py-2 hover:bg-zinc-50 rounded-xl transition-colors">
+        <div class="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center text-xs font-semibold text-zinc-600 shrink-0">
+          {{ userInitial }}
+        </div>
+        <div class="flex-1 text-left min-w-0">
+          <div class="text-xs font-medium text-zinc-700 truncate">{{ user.name }}</div>
+          <div class="text-[10px] text-zinc-400 truncate">{{ user.email }}</div>
+        </div>
+        <ChevronUp :class="['w-4 h-4 text-zinc-400 transition-transform', showUserMenu && 'rotate-180']" />
+      </button>
+
+      <!-- User popup menu -->
+      <div v-if="showUserMenu" class="absolute bottom-full left-3 right-3 mb-2 bg-white rounded-xl shadow-lg border border-zinc-200 overflow-hidden z-50">
+        <div class="px-3 py-2.5 border-b border-zinc-100">
+          <div class="text-xs font-medium text-zinc-700">{{ user.name }}</div>
+          <div class="text-[10px] text-zinc-400">{{ user.isAdmin ? '管理员' : '普通用户' }}</div>
+        </div>
+        <button @click="goSettings" class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-zinc-600 hover:bg-zinc-50 transition-colors">
+          <Settings class="w-4 h-4 text-zinc-400" /> 设置中心
+        </button>
+        <button @click="openLogoutConfirm" class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">
+          <LogOut class="w-4 h-4" /> 退出登录
+        </button>
+      </div>
     </div>
   </aside>
 

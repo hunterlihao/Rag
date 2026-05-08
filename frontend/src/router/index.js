@@ -3,10 +3,13 @@ import { createRouter, createWebHistory } from "vue-router";
 import { ensureAuthenticatedUser, getCurrentSession } from "@/services/auth";
 import { resolveHomeRoute } from "@/services/user";
 import AdminUsersView from "@/views/AdminUsersView.vue";
+import ForgotPasswordView from "@/views/ForgotPasswordView.vue";
 import KnowledgeView from "@/views/KnowledgeView.vue";
 import LoginView from "@/views/LoginView.vue";
+import PrivacyView from "@/views/PrivacyView.vue";
 import RegisterView from "@/views/RegisterView.vue";
 import SettingsView from "@/views/SettingsView.vue";
+import TermsView from "@/views/TermsView.vue";
 import WorkspaceView from "@/views/WorkspaceView.vue";
 
 const routes = [
@@ -51,6 +54,22 @@ const routes = [
     name: "settings",
     component: SettingsView,
     meta: { requiresAuth: true },
+  },
+  {
+    path: "/forgot-password",
+    name: "forgot-password",
+    component: ForgotPasswordView,
+    meta: { guestOnly: true },
+  },
+  {
+    path: "/privacy",
+    name: "privacy",
+    component: PrivacyView,
+  },
+  {
+    path: "/terms",
+    name: "terms",
+    component: TermsView,
   },
 ];
 

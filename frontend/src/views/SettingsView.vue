@@ -146,7 +146,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-screen bg-[#FAFAFA]">
+  <div class="flex h-screen bg-zinc-50">
     <ActionBusyOverlay v-bind="busyOverlayState" />
 
     <WorkspaceSidebar
@@ -187,92 +187,92 @@ onMounted(async () => {
           <!-- Hero -->
           <div>
             <span class="inline-flex items-center px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-3">设置中心</span>
-            <h1 class="text-xl font-bold text-[#0a0a0a] tracking-tight mb-1">个人设置与偏好</h1>
+            <h1 class="text-xl font-bold text-zinc-900 tracking-tight mb-1">个人设置与偏好</h1>
             <p class="text-sm text-zinc-500">修改资料、密码和个性化工作台偏好。</p>
           </div>
 
           <!-- Info tiles -->
           <div class="grid grid-cols-3 gap-3">
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4">
               <div class="flex items-center gap-2 mb-1">
                 <User class="w-3.5 h-3.5 text-zinc-400" />
                 <span class="text-[11px] text-zinc-400">用户</span>
               </div>
-              <p class="text-sm font-semibold text-[#0a0a0a]">{{ user?.name || '—' }}</p>
+              <p class="text-sm font-semibold text-zinc-900">{{ user?.name || '—' }}</p>
               <p class="text-[11px] text-zinc-400">{{ user?.isAdmin ? '管理员' : '普通用户' }}</p>
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4">
               <div class="flex items-center gap-2 mb-1">
                 <Home class="w-3.5 h-3.5 text-zinc-400" />
                 <span class="text-[11px] text-zinc-400">首页路由</span>
               </div>
-              <p class="text-sm font-semibold text-[#0a0a0a]">{{ effectiveHomeRouteLabel }}</p>
+              <p class="text-sm font-semibold text-zinc-900">{{ effectiveHomeRouteLabel }}</p>
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-4">
+            <div class="bg-white border border-zinc-200 rounded-xl p-4">
               <div class="flex items-center gap-2 mb-1">
                 <Keyboard class="w-3.5 h-3.5 text-zinc-400" />
                 <span class="text-[11px] text-zinc-400">发送方式</span>
               </div>
-              <p class="text-sm font-semibold text-[#0a0a0a]">{{ preferences.sendShortcut === 'ctrl-enter' ? 'Ctrl+Enter 发送' : 'Enter 发送' }}</p>
+              <p class="text-sm font-semibold text-zinc-900">{{ preferences.sendShortcut === 'ctrl-enter' ? 'Ctrl+Enter 发送' : 'Enter 发送' }}</p>
             </div>
           </div>
 
           <!-- Profile + Password -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Profile -->
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-6">
-              <h2 class="text-sm font-semibold text-[#0a0a0a] mb-4">个人资料</h2>
+            <div class="bg-white border border-zinc-200 rounded-xl p-6">
+              <h2 class="text-sm font-semibold text-zinc-900 mb-4">个人资料</h2>
               <div class="space-y-3">
                 <div>
                   <label class="block text-xs font-medium text-zinc-600 mb-1">用户名</label>
                   <div class="relative">
                     <User class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input v-model="profileForm.name" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="用户名" />
+                    <input v-model="profileForm.name" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="用户名" />
                   </div>
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-zinc-600 mb-1">邮箱</label>
                   <div class="relative">
                     <Mail class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input v-model="profileForm.email" type="email" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="email@example.com" />
+                    <input v-model="profileForm.email" type="email" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="email@example.com" />
                   </div>
                 </div>
                 <div v-if="profileError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs"><AlertCircle class="w-3.5 h-3.5" /> {{ profileError }}</div>
                 <div v-if="profileSuccess" class="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg text-xs"><CheckCircle class="w-3.5 h-3.5" /> {{ profileSuccess }}</div>
-                <button @click="saveProfile" :disabled="profileLoading" class="px-4 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+                <button @click="saveProfile" :disabled="profileLoading" class="px-4 py-2 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center gap-2 disabled:opacity-70">
                   <Loader2 v-if="profileLoading" class="w-3.5 h-3.5 animate-spin" /> 保存资料
                 </button>
               </div>
             </div>
 
             <!-- Password -->
-            <div class="bg-white border border-[#ebebeb] rounded-xl p-6">
-              <h2 class="text-sm font-semibold text-[#0a0a0a] mb-4">安全设置</h2>
+            <div class="bg-white border border-zinc-200 rounded-xl p-6">
+              <h2 class="text-sm font-semibold text-zinc-900 mb-4">安全设置</h2>
               <div class="space-y-3">
                 <div>
                   <label class="block text-xs font-medium text-zinc-600 mb-1">当前密码</label>
                   <div class="relative">
                     <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input v-model="passwordForm.current_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="当前密码" />
+                    <input v-model="passwordForm.current_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="当前密码" />
                   </div>
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-zinc-600 mb-1">新密码</label>
                   <div class="relative">
                     <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input v-model="passwordForm.new_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="新密码（至少6位）" />
+                    <input v-model="passwordForm.new_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="新密码（至少6位）" />
                   </div>
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-zinc-600 mb-1">确认新密码</label>
                   <div class="relative">
                     <Lock class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input v-model="passwordForm.confirm_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" placeholder="再次输入新密码" />
+                    <input v-model="passwordForm.confirm_password" type="password" class="w-full h-9 pl-9 pr-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:bg-white transition-all" placeholder="再次输入新密码" />
                   </div>
                 </div>
                 <div v-if="passwordError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs"><AlertCircle class="w-3.5 h-3.5" /> {{ passwordError }}</div>
                 <div v-if="passwordSuccess" class="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg text-xs"><CheckCircle class="w-3.5 h-3.5" /> {{ passwordSuccess }}</div>
-                <button @click="savePassword" :disabled="passwordLoading" class="px-4 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+                <button @click="savePassword" :disabled="passwordLoading" class="px-4 py-2 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center gap-2 disabled:opacity-70">
                   <Loader2 v-if="passwordLoading" class="w-3.5 h-3.5 animate-spin" /> 更新密码
                 </button>
               </div>
@@ -280,8 +280,8 @@ onMounted(async () => {
           </div>
 
           <!-- Preferences -->
-          <div class="bg-white border border-[#ebebeb] rounded-xl p-6">
-            <h2 class="text-sm font-semibold text-[#0a0a0a] mb-4">工作台偏好</h2>
+          <div class="bg-white border border-zinc-200 rounded-xl p-6">
+            <h2 class="text-sm font-semibold text-zinc-900 mb-4">工作台偏好</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
               <!-- Home route -->
               <div>
@@ -289,7 +289,7 @@ onMounted(async () => {
                 <select
                   :value="effectiveHomeRoute"
                   @change="preferences.homeRoute = ($event.target).value"
-                  class="w-full h-9 px-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  class="w-full h-9 px-3 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
                 >
                   <option v-for="opt in homeRouteOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                 </select>
@@ -300,11 +300,11 @@ onMounted(async () => {
                 <label class="block text-xs font-medium text-zinc-600 mb-2">发送快捷键</label>
                 <div class="flex gap-3">
                   <label class="flex items-center gap-2 cursor-pointer">
-                    <input v-model="preferences.sendShortcut" type="radio" value="enter" class="w-4 h-4 text-blue-600" />
+                    <input v-model="preferences.sendShortcut" type="radio" value="enter" class="w-4 h-4 text-zinc-900" />
                     <span class="text-sm text-zinc-700">Enter 发送</span>
                   </label>
                   <label class="flex items-center gap-2 cursor-pointer">
-                    <input v-model="preferences.sendShortcut" type="radio" value="ctrl-enter" class="w-4 h-4 text-blue-600" />
+                    <input v-model="preferences.sendShortcut" type="radio" value="ctrl-enter" class="w-4 h-4 text-zinc-900" />
                     <span class="text-sm text-zinc-700">Ctrl+Enter 发送</span>
                   </label>
                 </div>
@@ -315,11 +315,11 @@ onMounted(async () => {
                 <label class="block text-xs font-medium text-zinc-600 mb-2">会话列表密度</label>
                 <div class="flex gap-3">
                   <label class="flex items-center gap-2 cursor-pointer">
-                    <input v-model="preferences.sessionDensity" type="radio" value="comfy" class="w-4 h-4 text-blue-600" />
+                    <input v-model="preferences.sessionDensity" type="radio" value="comfy" class="w-4 h-4 text-zinc-900" />
                     <span class="text-sm text-zinc-700">舒展</span>
                   </label>
                   <label class="flex items-center gap-2 cursor-pointer">
-                    <input v-model="preferences.sessionDensity" type="radio" value="compact" class="w-4 h-4 text-blue-600" />
+                    <input v-model="preferences.sessionDensity" type="radio" value="compact" class="w-4 h-4 text-zinc-900" />
                     <span class="text-sm text-zinc-700">紧凑</span>
                   </label>
                 </div>
@@ -330,11 +330,11 @@ onMounted(async () => {
                 <label class="block text-xs font-medium text-zinc-600 mb-2">知识库提示语</label>
                 <div class="flex gap-3">
                   <label class="flex items-center gap-2 cursor-pointer">
-                    <input v-model="preferences.showKnowledgeTips" type="radio" :value="true" class="w-4 h-4 text-blue-600" />
+                    <input v-model="preferences.showKnowledgeTips" type="radio" :value="true" class="w-4 h-4 text-zinc-900" />
                     <span class="text-sm text-zinc-700">显示</span>
                   </label>
                   <label class="flex items-center gap-2 cursor-pointer">
-                    <input v-model="preferences.showKnowledgeTips" type="radio" :value="false" class="w-4 h-4 text-blue-600" />
+                    <input v-model="preferences.showKnowledgeTips" type="radio" :value="false" class="w-4 h-4 text-zinc-900" />
                     <span class="text-sm text-zinc-700">隐藏</span>
                   </label>
                 </div>
@@ -352,7 +352,7 @@ onMounted(async () => {
               </div>
             </div>
 
-            <button @click="saveUserPreferences" :disabled="preferenceLoading" class="mt-4 px-4 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-70">
+            <button @click="saveUserPreferences" :disabled="preferenceLoading" class="mt-4 px-4 py-2 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center gap-2 disabled:opacity-70">
               <Loader2 v-if="preferenceLoading" class="w-3.5 h-3.5 animate-spin" /> 保存偏好设置
             </button>
           </div>

@@ -21,8 +21,6 @@ export function buildSidebarNavItems(user) {
     items.push({ name: "admin-users", label: "用户管理" });
   }
 
-  items.push({ name: "settings", label: "设置中心" });
-
   return items;
 }
 

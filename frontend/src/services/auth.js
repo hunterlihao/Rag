@@ -75,6 +75,14 @@ export async function login(payload) {
   return user;
 }
 
+export async function forgotPassword(payload) {
+  return requestJson(appConfig.apiBaseUrl, "/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    auth: false,
+  });
+}
+
 export async function register(payload) {
   const result = await requestJson(appConfig.apiBaseUrl, "/auth/register", {
     method: "POST",

@@ -152,49 +152,49 @@ watch(() => messageScrollSignature.value, async () => {
   <div class="flex-1 flex flex-col min-w-0 h-full bg-white" @click="closePopovers">
     <!-- ===== HERO / EMPTY STATE ===== -->
     <div v-if="showHero" class="flex-1 flex flex-col items-center justify-center px-6">
-      <div class="w-14 h-14 rounded-xl bg-zinc-100 flex items-center justify-center mb-5 ring-1 ring-[#ebebeb]">
+      <div class="w-14 h-14 rounded-xl bg-zinc-100 flex items-center justify-center mb-5 ring-1 ring-zinc-200">
         <Sparkles class="w-7 h-7 text-zinc-600" />
       </div>
-      <h1 class="text-2xl font-semibold text-[#0a0a0a] mb-1.5 tracking-[-0.01em]">今天想让我帮你处理什么？</h1>
+      <h1 class="text-2xl font-semibold text-zinc-900 mb-1.5 tracking-[-0.01em]">今天想让我帮你处理什么？</h1>
       <p class="text-sm text-zinc-500 mb-8">{{ welcomeMessage }}</p>
 
       <div v-if="suggestions.length" class="max-w-[600px] w-full mb-10">
         <div class="flex flex-wrap gap-2 justify-center">
-          <button v-for="(s, i) in suggestions" :key="i" @click="emit('choose-suggestion', s)" class="px-3 py-2 text-xs text-zinc-600 bg-white border border-[#ebebeb] rounded-md hover:bg-zinc-50 hover:border-zinc-300 transition-colors">{{ s }}</button>
+          <button v-for="(s, i) in suggestions" :key="i" @click="emit('choose-suggestion', s)" class="px-3 py-2 text-xs text-zinc-600 bg-white border border-zinc-200 rounded-md hover:bg-zinc-50 hover:border-zinc-300 transition-colors">{{ s }}</button>
         </div>
       </div>
     </div>
 
     <!-- ===== CONVERSATION STATE ===== -->
     <template v-else>
-      <div class="px-6 py-3 border-b border-[#ebebeb] bg-white flex items-center justify-between shrink-0">
+      <div class="px-6 py-3 border-b border-zinc-200 bg-white flex items-center justify-between shrink-0">
         <div class="flex items-center gap-3 min-w-0">
           <div class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center shrink-0">
             <Sparkles class="w-4 h-4 text-zinc-600" />
           </div>
           <div>
-            <h2 class="text-[13px] font-semibold text-[#0a0a0a]">{{ session.title || '新对话' }}</h2>
+            <h2 class="text-[13px] font-semibold text-zinc-900">{{ session.title || '新对话' }}</h2>
             <p class="text-[11px] text-zinc-500">{{ renderedMessages.length }} 条消息 · {{ providerLabel }}</p>
           </div>
         </div>
       </div>
 
-      <div ref="messagePaneRef" class="flex-1 overflow-y-auto px-6 py-6 bg-[#fafafa]">
+      <div ref="messagePaneRef" class="flex-1 overflow-y-auto px-6 py-6 bg-zinc-50">
         <div class="max-w-[640px] mx-auto space-y-5">
           <div v-for="message in renderedMessages" :key="message.id">
             <div v-if="message.role === 'user'" class="flex flex-col items-end">
-              <div class="max-w-[75%] px-4 py-2.5 bg-[#0a0a0a] text-white rounded-lg rounded-br-sm text-sm leading-relaxed whitespace-pre-wrap">{{ message.content }}</div>
+              <div class="max-w-[75%] px-4 py-2.5 bg-zinc-900 text-white rounded-lg rounded-br-sm text-sm leading-relaxed whitespace-pre-wrap">{{ message.content }}</div>
             </div>
 
             <div v-else class="flex gap-3">
-              <div class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center shrink-0 mt-0.5 ring-1 ring-[#ebebeb]">
+              <div class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center shrink-0 mt-0.5 ring-1 ring-zinc-200">
                 <Sparkles class="w-4 h-4 text-zinc-500" />
               </div>
               <div class="flex-1 min-w-0">
                 <span class="text-[11px] font-medium text-zinc-500 mb-1.5 block">AI 助手</span>
-                <div class="bg-white border border-[#ebebeb] rounded-lg">
+                <div class="bg-white border border-zinc-200 rounded-lg">
                   <div class="px-4 py-3">
-                    <div class="markdown-content text-sm text-[#0a0a0a] leading-relaxed" v-html="renderMessageHtml(message)"></div>
+                    <div class="markdown-content text-sm text-zinc-900 leading-relaxed" v-html="renderMessageHtml(message)"></div>
                   </div>
                 </div>
                 <div class="flex items-center gap-1 mt-1">
@@ -208,10 +208,10 @@ watch(() => messageScrollSignature.value, async () => {
           </div>
 
           <div v-if="showTyping" class="flex gap-3">
-            <div class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center shrink-0 ring-1 ring-[#ebebeb]">
+            <div class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center shrink-0 ring-1 ring-zinc-200">
               <Sparkles class="w-4 h-4 text-zinc-500" />
             </div>
-            <div class="bg-white border border-[#ebebeb] rounded-lg px-4 py-3">
+            <div class="bg-white border border-zinc-200 rounded-lg px-4 py-3">
               <div class="flex gap-1.5 mb-2">
                 <span class="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" />
                 <span class="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
@@ -225,10 +225,10 @@ watch(() => messageScrollSignature.value, async () => {
     </template>
 
     <!-- ===== BOTTOM INPUT ===== -->
-    <div class="px-6 py-3 border-t border-[#ebebeb] bg-white shrink-0">
+    <div class="px-6 py-3 border-t border-zinc-200 bg-white shrink-0">
       <div class="max-w-[640px] mx-auto">
         <div class="flex items-end gap-2">
-          <div class="flex-1 flex items-end gap-2 bg-[#fafafa] border border-[#ebebeb] rounded-lg px-3 py-2.5 focus-within:border-zinc-300 focus-within:bg-white transition-colors">
+          <div class="flex-1 flex items-end gap-2 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2.5 focus-within:border-zinc-300 focus-within:bg-white transition-colors">
             <textarea
               :value="prompt"
               @input="emit('update:prompt', $event.target.value)"
@@ -252,7 +252,7 @@ watch(() => messageScrollSignature.value, async () => {
             v-else
             @click="submitPrompt"
             :disabled="!prompt.trim()"
-            class="shrink-0 w-9 h-9 bg-[#0a0a0a] text-white rounded-full flex items-center justify-center hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shadow-sm"
+            class="shrink-0 w-9 h-9 bg-zinc-900 text-white rounded-full flex items-center justify-center hover:bg-zinc-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shadow-sm"
             title="发送"
           >
             <ArrowUp class="w-4 h-4" />
