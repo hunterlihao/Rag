@@ -1,5 +1,32 @@
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
+// 性能优化: Markdown渲染缓存
+const markdownCache = new Map();
+const MAX_CACHE_SIZE = 500; // 最大缓存500条
+
+// 简单LRU缓存实现
+function cacheGet(key) {
+  if (!markdownCache.has(key)) return null;
+  const value = markdownCache.get(key);
+  // 更新访问顺序
+  markdownCache.delete(key);
+  markdownCache.set(key, value);
+  return value;
+}
+
+function cacheSet(key, value) {
+  // 如果缓存已满,删除最旧的
+  if (markdownCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = markdownCache.keys().next().value;
+    markdownCache.delete(firstKey);
+  }
+  markdownCache.set(key, value);
+}
+
+function cacheClear() {
+  markdownCache.clear();
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -163,7 +190,15 @@ function renderParagraph(lines, startIndex) {
 }
 
 export function renderMarkdown(markdownText) {
-  const normalizedText = String(markdownText || "").replace(/\r\n?/g, "\n");
+  const cacheKey = String(markdownText || "");
+  
+  // 性能优化: 检查缓存
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+  
+  const normalizedText = cacheKey.replace(/\r\n?/g, "\n");
   if (!normalizedText.trim()) {
     return "";
   }
@@ -244,5 +279,16 @@ export function renderMarkdown(markdownText) {
     cursor = paragraph.nextIndex > cursor ? paragraph.nextIndex : cursor + 1;
   }
 
-  return blocks.join("");
+  const result = blocks.join("");
+  
+  // 性能优化: 缓存结果
+  cacheSet(cacheKey, result);
+  
+  return result;
 }
+
+// 导出缓存管理函数(用于调试和清理)
+export const markdownCacheUtils = {
+  clear: cacheClear,
+  getSize: () => markdownCache.size,
+};

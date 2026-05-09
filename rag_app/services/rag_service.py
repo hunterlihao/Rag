@@ -1,6 +1,9 @@
 import json
 import logging
 import re
+import time
+from collections import OrderedDict
+from datetime import datetime, timedelta
 
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -16,6 +19,82 @@ logger = logging.getLogger(__name__)
 NO_CONTEXT_TEXT = "无资料"
 CHAT_CONTEXT_TEXT = "本轮选择普通聊天模式，未检索知识库。"
 RETRIEVAL_ERROR_CONTEXT_TEXT = "知识库检索暂时不可用。"
+
+# RAG检索缓存配置
+RETRIEVAL_CACHE_MAX_SIZE = 1000  # 最大缓存条目数
+RETRIEVAL_CACHE_TTL_SECONDS = 300  # 缓存过期时间: 5分钟
+
+
+class TTLCache:
+    """带TTL和大小限制的缓存实现"""
+    
+    def __init__(self, max_size: int = 1000, ttl_seconds: int = 300):
+        self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+        self._cache: OrderedDict[str, dict] = OrderedDict()
+        self._lock = __import__('threading').Lock()
+    
+    def get(self, key: str) -> any:
+        """获取缓存,如果过期或不存在则返回None"""
+        with self._lock:
+            if key not in self._cache:
+                return None
+            
+            entry = self._cache[key]
+            # 检查是否过期
+            if time.time() > entry['expire_at']:
+                self._cache.pop(key, None)
+                return None
+            
+            # 更新访问顺序(LRU)
+            self._cache.move_to_end(key)
+            return entry['value']
+    
+    def set(self, key: str, value: any):
+        """设置缓存,自动清理过期和超出大小的条目"""
+        with self._lock:
+            # 如果key已存在,先删除
+            if key in self._cache:
+                self._cache.pop(key)
+            
+            # 如果缓存已满,删除最旧的
+            while len(self._cache) >= self.max_size:
+                self._cache.popitem(last=False)
+            
+            # 添加新条目
+            self._cache[key] = {
+                'value': value,
+                'expire_at': time.time() + self.ttl_seconds,
+                'created_at': time.time()
+            }
+    
+    def pop(self, key: str, default=None) -> any:
+        """删除并返回缓存值"""
+        with self._lock:
+            entry = self._cache.pop(key, None)
+            return entry['value'] if entry else default
+    
+    def clear(self):
+        """清空缓存"""
+        with self._lock:
+            self._cache.clear()
+    
+    def cleanup_expired(self) -> int:
+        """清理所有过期条目,返回清理数量"""
+        with self._lock:
+            now = time.time()
+            expired_keys = [
+                key for key, entry in self._cache.items()
+                if now > entry['expire_at']
+            ]
+            for key in expired_keys:
+                self._cache.pop(key, None)
+            return len(expired_keys)
+    
+    @property
+    def size(self) -> int:
+        """当前缓存大小"""
+        return len(self._cache)
 
 
 def format_source_list(documents: list[Document]) -> str:
@@ -220,7 +299,11 @@ class RagService(object):
         self.answer_chain_cache = {}
         self.query_rewrite_chain_cache = {}
         self.rerank_chain_cache = {}
-        self._retrieval_cache: dict[str, list[Document]] = {}
+        # 修复: 使用带TTL和大小限制的缓存,防止内存泄漏
+        self._retrieval_cache = TTLCache(
+            max_size=RETRIEVAL_CACHE_MAX_SIZE,
+            ttl_seconds=RETRIEVAL_CACHE_TTL_SECONDS
+        )
 
     def get_query_rewrite_chain(self, chat_model_id: str | None):
         normalized_model_id = config.normalize_chat_model_id(chat_model_id)
@@ -346,7 +429,7 @@ class RagService(object):
         if answer_mode == config.ANSWER_MODE_CHAT or is_casual_chat_query(original_query):
             cache_key = payload.get("_retrieval_cache_key")
             if cache_key:
-                self._retrieval_cache[cache_key] = []
+                self._retrieval_cache.set(cache_key, [])
             return CHAT_CONTEXT_TEXT
 
         history = payload.get("history", [])
@@ -360,7 +443,7 @@ class RagService(object):
             logger.exception("Knowledge retrieval failed.")
             cache_key = payload.get("_retrieval_cache_key")
             if cache_key:
-                self._retrieval_cache[cache_key] = []
+                self._retrieval_cache.set(cache_key, [])
             return RETRIEVAL_ERROR_CONTEXT_TEXT
 
         raise_if_cancelled(payload)
@@ -369,7 +452,7 @@ class RagService(object):
         final_documents = reranked_documents[:config.RETRIEVAL_TOP_K]
         cache_key = payload.get("_retrieval_cache_key")
         if cache_key:
-            self._retrieval_cache[cache_key] = final_documents
+            self._retrieval_cache.set(cache_key, final_documents)
         self.print_retrieval_debug(original_query, retrieval_query, final_documents)
         return format_documents(final_documents)
 

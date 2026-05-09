@@ -2,7 +2,7 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from rag_app.services.auth_service import AuthService
-from rag_app.services.knowledge_base import KnowledgeBaseService
+from rag_app.services.knowledge_base import KnowledgeBaseService, cleanup_all_collection_locks
 from rag_app.storage.chat_history import delete_session_messages
 from rag_app.storage.models import ChatSession, UploadedContentRegistry, UploadedDocument, User
 
@@ -198,7 +198,13 @@ class UserService:
         for registry in registries:
             database.delete(registry)
 
+        # 清理向量库
         KnowledgeBaseService(user.id).delete_all_documents()
+        
+        # 清理该用户的集合锁,防止内存泄漏
+        collection_name = KnowledgeBaseService(user.id).collection_name
+        from rag_app.services.knowledge_base import release_collection_lock
+        release_collection_lock(collection_name)
 
     def count_admin_users(self, database: Session) -> int:
         statement = select(func.count()).select_from(User).where(User.is_admin.is_(True))

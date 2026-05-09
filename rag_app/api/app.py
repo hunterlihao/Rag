@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import uuid
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -331,11 +332,23 @@ answer_run_registry = AnswerRunRegistry()
 
 class WebSocketManager:
     """WebSocket 连接管理器，用于推送上传进度"""
+    # 修复: 添加连接数限制和心跳机制
+    MAX_CONNECTIONS = 1000  # 最大连接数
+    HEARTBEAT_INTERVAL = 30  # 心跳间隔(秒)
+    HEARTBEAT_TIMEOUT = 90  # 心跳超时时间(秒)
+    
     def __init__(self):
         self._connections: dict[str, WebSocket] = {}
         self._lock = Lock()
-
+        self._heartbeat_tasks: dict[str, asyncio.Task] = {}  # 心跳任务
+        self._last_activity: dict[str, float] = {}  # 最后活动时间
+    
     async def connect(self, websocket: WebSocket, user_id: str):
+        # 修复: 检查连接数限制
+        with self._lock:
+            if len(self._connections) >= self.MAX_CONNECTIONS:
+                raise RuntimeError(f"WebSocket连接数已达上限({self.MAX_CONNECTIONS})")
+        
         await websocket.accept()
         with self._lock:
             # 如果已有连接，先关闭
@@ -344,11 +357,60 @@ class WebSocketManager:
                     await self._connections[user_id].close()
                 except Exception:
                     pass
+                # 清理旧的心跳任务
+                if user_id in self._heartbeat_tasks:
+                    self._heartbeat_tasks[user_id].cancel()
+            
             self._connections[user_id] = websocket
+            self._last_activity[user_id] = time.time()
+        
+        # 启动心跳任务
+        self._heartbeat_tasks[user_id] = asyncio.create_task(
+            self._heartbeat_loop(user_id, websocket)
+        )
+    
+    async def _heartbeat_loop(self, user_id: str, websocket: WebSocket):
+        """心跳循环,定期发送ping检测连接状态"""
+        try:
+            while True:
+                await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+                
+                # 检查是否超时
+                with self._lock:
+                    last_active = self._last_activity.get(user_id, 0)
+                
+                if time.time() - last_active > self.HEARTBEAT_TIMEOUT:
+                    logger.warning("WebSocket心跳超时: %s", user_id)
+                    self.disconnect(user_id)
+                    break
+                
+                # 发送心跳
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    logger.warning("WebSocket心跳发送失败: %s", user_id)
+                    self.disconnect(user_id)
+                    break
+        except asyncio.CancelledError:
+            pass  # 任务被取消,正常退出
+        except Exception as e:
+            logger.error("WebSocket心跳异常: %s, %s", user_id, str(e))
+            self.disconnect(user_id)
 
     def disconnect(self, user_id: str):
         with self._lock:
+            # 取消心跳任务
+            if user_id in self._heartbeat_tasks:
+                self._heartbeat_tasks[user_id].cancel()
+                self._heartbeat_tasks.pop(user_id, None)
+            
             self._connections.pop(user_id, None)
+            self._last_activity.pop(user_id, None)
+    
+    def update_activity(self, user_id: str):
+        """更新最后活动时间"""
+        with self._lock:
+            self._last_activity[user_id] = time.time()
 
     async def send_upload_progress(self, user_id: str, progress_data: dict):
         """发送上传进度到指定用户"""
@@ -360,6 +422,7 @@ class WebSocketManager:
                     "type": "upload_progress",
                     **progress_data,
                 })
+                self.update_activity(user_id)
             except Exception:
                 self.disconnect(user_id)
 
@@ -373,8 +436,30 @@ class WebSocketManager:
                     "type": "upload_complete",
                     **complete_data,
                 })
+                self.update_activity(user_id)
             except Exception:
                 self.disconnect(user_id)
+    
+    def get_connection_count(self) -> int:
+        """获取当前连接数"""
+        with self._lock:
+            return len(self._connections)
+    
+    async def cleanup_all(self):
+        """清理所有连接(用于服务关闭)"""
+        with self._lock:
+            for user_id in list(self._connections.keys()):
+                try:
+                    if user_id in self._heartbeat_tasks:
+                        self._heartbeat_tasks[user_id].cancel()
+                    websocket = self._connections.get(user_id)
+                    if websocket:
+                        await websocket.close()
+                except Exception:
+                    pass
+            self._connections.clear()
+            self._heartbeat_tasks.clear()
+            self._last_activity.clear()
 
 
 websocket_manager = WebSocketManager()
@@ -445,6 +530,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # 清理所有WebSocket连接
+        await websocket_manager.cleanup_all()
         logger.info("Application shutdown completed.", extra={"event": "app.shutdown.completed"})
 
 
@@ -609,9 +696,38 @@ def create_app() -> FastAPI:
             await websocket_manager.connect(websocket, user_id)
             try:
                 while True:
-                    await websocket.receive_text()
+                    # 接收消息(用于保持连接活跃)
+                    try:
+                        message = await asyncio.wait_for(
+                            websocket.receive_text(),
+                            timeout=websocket_manager.HEARTBEAT_TIMEOUT
+                        )
+                        # 更新活动时间
+                        websocket_manager.update_activity(user_id)
+                        
+                        # 处理pong响应
+                        try:
+                            data = json.loads(message)
+                            if data.get("type") == "pong":
+                                continue
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+                    except asyncio.TimeoutError:
+                        # 超时,连接可能已断开
+                        logger.warning("WebSocket接收超时: %s", user_id)
+                        break
             except WebSocketDisconnect:
                 websocket_manager.disconnect(user_id)
+        except RuntimeError as e:
+            # 连接数限制等错误
+            logger.warning("WebSocket连接被拒绝: %s", str(e))
+            try:
+                await websocket.close(
+                    code=status.WS_1008_POLICY_VIOLATION,
+                    reason=str(e)
+                )
+            except Exception:
+                pass
         finally:
             database.close()
 

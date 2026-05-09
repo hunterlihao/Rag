@@ -19,6 +19,7 @@ database_initialized = False
 
 def ensure_schema_updates():
     statements = [
+        # 原有字段迁移
         """
         ALTER TABLE IF EXISTS rag_user_sessions
         ADD COLUMN IF NOT EXISTS message_count INTEGER
@@ -78,6 +79,23 @@ def ensure_schema_updates():
         """
         ALTER TABLE IF EXISTS rag_uploaded_content_registry
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        """,
+        # 性能优化: 添加索引防止N+1查询
+        """
+        CREATE INDEX IF NOT EXISTS idx_uploader_id
+        ON rag_uploaded_documents (uploader_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_content_sha256
+        ON rag_uploaded_documents (content_sha256)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_uploader_created
+        ON rag_uploaded_documents (uploader_id, created_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_user_session
+        ON rag_user_sessions (user_id, updated_at)
         """,
     ]
 

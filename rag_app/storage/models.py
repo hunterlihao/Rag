@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from rag_app.storage.database import Base
@@ -26,6 +26,9 @@ class User(Base):
 
 class ChatSession(Base):
     __tablename__ = "rag_user_sessions"
+    __table_args__ = (
+        Index('idx_user_session', 'user_id', 'updated_at'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(
@@ -45,6 +48,11 @@ class ChatSession(Base):
 
 class UploadedDocument(Base):
     __tablename__ = "rag_uploaded_documents"
+    __table_args__ = (
+        Index('idx_uploader_id', 'uploader_id'),
+        Index('idx_content_sha256', 'content_sha256'),
+        Index('idx_uploader_created', 'uploader_id', 'created_at'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)

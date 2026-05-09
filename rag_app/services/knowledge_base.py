@@ -1,4 +1,5 @@
 import os
+import logging
 from threading import Lock, RLock
 import uuid
 from datetime import datetime
@@ -9,18 +10,45 @@ from langchain_chroma import Chroma
 from rag_app import config
 from rag_app.loaders.document_extractors import extract_text_from_file
 
+logger = logging.getLogger(__name__)
 DUPLICATE_MESSAGE = "文件已经处理过了"
 _collection_lock_guard = Lock()
 _collection_locks: dict[str, RLock] = {}
+_collection_lock_refs: dict[str, int] = {}  # 引用计数
 
 
 def get_collection_lock(collection_name: str) -> RLock:
+    """获取集合锁,使用引用计数管理"""
     with _collection_lock_guard:
         lock = _collection_locks.get(collection_name)
         if lock is None:
             lock = RLock()
             _collection_locks[collection_name] = lock
+            _collection_lock_refs[collection_name] = 0
+        _collection_lock_refs[collection_name] = _collection_lock_refs.get(collection_name, 0) + 1
         return lock
+
+
+def release_collection_lock(collection_name: str):
+    """释放集合锁,当引用计数为0时删除锁对象"""
+    with _collection_lock_guard:
+        if collection_name in _collection_lock_refs:
+            _collection_lock_refs[collection_name] -= 1
+            if _collection_lock_refs[collection_name] <= 0:
+                # 引用计数为0,删除锁对象
+                _collection_locks.pop(collection_name, None)
+                _collection_lock_refs.pop(collection_name, None)
+                logger.debug("清理集合锁: %s", collection_name)
+
+
+def cleanup_all_collection_locks():
+    """清理所有集合锁(用于用户删除等场景)"""
+    with _collection_lock_guard:
+        count = len(_collection_locks)
+        _collection_locks.clear()
+        _collection_lock_refs.clear()
+        if count > 0:
+            logger.info("清理了 %d 个集合锁", count)
 
 
 class KnowledgeBaseService(object):
@@ -37,12 +65,16 @@ class KnowledgeBaseService(object):
         self.spliter = config.TEXT_SPLITTER
 
     def upload_by_str(self, data: str, filename: str):
-        with get_collection_lock(self.collection_name):
-            return self._save_document_text(
-                text=data,
-                filename=filename,
-                content_sha256=None,
-            )
+        lock = get_collection_lock(self.collection_name)
+        try:
+            with lock:
+                return self._save_document_text(
+                    text=data,
+                    filename=filename,
+                    content_sha256=None,
+                )
+        finally:
+            release_collection_lock(self.collection_name)
 
     def upload_by_file(
         self,
@@ -52,12 +84,16 @@ class KnowledgeBaseService(object):
         content_sha256: str | None = None,
     ):
         text = extract_text_from_file(file_source, filename)
-        with get_collection_lock(self.collection_name):
-            return self._save_document_text(
-                text=text,
-                filename=filename,
-                content_sha256=content_sha256,
-            )
+        lock = get_collection_lock(self.collection_name)
+        try:
+            with lock:
+                return self._save_document_text(
+                    text=text,
+                    filename=filename,
+                    content_sha256=content_sha256,
+                )
+        finally:
+            release_collection_lock(self.collection_name)
 
     def _save_document_text(
         self,
@@ -113,21 +149,29 @@ class KnowledgeBaseService(object):
         if not content_sha256:
             return 0
 
-        with get_collection_lock(self.collection_name):
-            result = self.chroma.get(where={"content_sha256": content_sha256})
-            chunk_ids = [str(item) for item in result.get("ids", [])]
+        lock = get_collection_lock(self.collection_name)
+        try:
+            with lock:
+                result = self.chroma.get(where={"content_sha256": content_sha256})
+                chunk_ids = [str(item) for item in result.get("ids", [])]
 
-            if chunk_ids:
-                self.chroma.delete(ids=chunk_ids)
-            return len(chunk_ids)
+                if chunk_ids:
+                    self.chroma.delete(ids=chunk_ids)
+                return len(chunk_ids)
+        finally:
+            release_collection_lock(self.collection_name)
 
     def delete_all_documents(self) -> int:
-        with get_collection_lock(self.collection_name):
-            result = self.chroma.get()
-            chunk_ids = [str(item) for item in result.get("ids", [])]
-            if chunk_ids:
-                self.chroma.delete(ids=chunk_ids)
-            return len(chunk_ids)
+        lock = get_collection_lock(self.collection_name)
+        try:
+            with lock:
+                result = self.chroma.get()
+                chunk_ids = [str(item) for item in result.get("ids", [])]
+                if chunk_ids:
+                    self.chroma.delete(ids=chunk_ids)
+                return len(chunk_ids)
+        finally:
+            release_collection_lock(self.collection_name)
 
     def delete_document(
         self,
@@ -136,14 +180,18 @@ class KnowledgeBaseService(object):
         if not document_id:
             raise ValueError("旧知识库记录缺少向量文档标识，无法安全删除，请重新导入后再删除。")
 
-        with get_collection_lock(self.collection_name):
-            result = self.chroma.get(where={"document_id": document_id})
-            chunk_ids = [str(item) for item in result.get("ids", [])]
+        lock = get_collection_lock(self.collection_name)
+        try:
+            with lock:
+                result = self.chroma.get(where={"document_id": document_id})
+                chunk_ids = [str(item) for item in result.get("ids", [])]
 
-            if chunk_ids:
-                self.chroma.delete(ids=chunk_ids)
+                if chunk_ids:
+                    self.chroma.delete(ids=chunk_ids)
 
-        return {
-            "deleted_chunks": len(chunk_ids),
-            "message": f"已删除 {len(chunk_ids)} 个知识片段",
-        }
+            return {
+                "deleted_chunks": len(chunk_ids),
+                "message": f"已删除 {len(chunk_ids)} 个知识片段",
+            }
+        finally:
+            release_collection_lock(self.collection_name)
