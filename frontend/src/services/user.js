@@ -57,6 +57,13 @@ export async function deleteAdminUser(userId) {
   });
 }
 
+// 异步删除用户 (RabbitMQ模式)
+export async function deleteAdminUserAsync(userId) {
+  return requestJson(appConfig.apiBaseUrl, `/admin/users/${userId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getPreferences(user = null) {
   const storageKey = getUserPreferenceKey(user);
   try {

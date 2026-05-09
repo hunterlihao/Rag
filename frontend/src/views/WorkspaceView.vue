@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import ChatWorkspace from "@/components/ChatWorkspace.vue";
@@ -11,8 +11,10 @@ import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from 
 import { getPreferences, savePreferences } from "@/services/user";
 import {
   buildWelcomeMessage,
+  connectUploadWebSocket,
   createSession,
   deleteSession,
+  disconnectUploadWebSocket,
   fetchBackendMeta,
   fetchSessionDetail,
   fetchSessions,
@@ -330,6 +332,12 @@ onMounted(async () => {
   } finally {
     pageLoading.value = false;
   }
+
+  connectUploadWebSocket();
+});
+
+onUnmounted(() => {
+  disconnectUploadWebSocket();
 });
 </script>
 

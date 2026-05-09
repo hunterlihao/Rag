@@ -338,6 +338,40 @@ export async function deleteUploads(uploadIds) {
   });
 }
 
+// 异步删除单个文件 (RabbitMQ模式)
+export async function deleteUploadAsync(uploadId) {
+  return requestJson(appConfig.apiBaseUrl, `/uploads/${uploadId}`, {
+    method: "DELETE",
+  });
+}
+
+// 异步批量删除文件 (RabbitMQ模式)
+export async function deleteUploadsAsync(uploadIds) {
+  return requestJson(appConfig.apiBaseUrl, "/uploads/batch-delete", {
+    method: "POST",
+    body: JSON.stringify({ upload_ids: uploadIds }),
+  });
+}
+
+// 异步导出会话 (RabbitMQ模式)
+export async function exportSessionAsync(sessionId, format = "json") {
+  return requestJson(appConfig.apiBaseUrl, `/sessions/${sessionId}/export?format=${format}`);
+}
+
+// 下载导出文件
+export async function downloadExport(downloadUrl) {
+  const session = getSession();
+  const headers = new Headers();
+  if (session?.token) {
+    headers.set("Authorization", `Bearer ${session.token}`);
+  }
+  const response = await fetch(`${appConfig.apiBaseUrl}${downloadUrl}`, { headers });
+  if (!response.ok) {
+    throw new Error("下载导出文件失败");
+  }
+  return await response.blob();
+}
+
 // WebSocket 连接管理
 let uploadWebSocket = null;
 const uploadWsListeners = [];
@@ -366,22 +400,25 @@ export function connectUploadWebSocket(onMessage) {
   };
 
   uploadWebSocket.onmessage = (event) => {
+    // 忽略二进制消息（如心跳 ping 帧）
+    if (typeof event.data !== "string") return;
+
     try {
       const data = JSON.parse(event.data);
-      
+
       // 处理认证成功响应
       if (data.type === "auth_success") {
         console.log("WebSocket认证成功");
         return;
       }
-      
+
       // 处理认证失败
       if (data.type === "auth_failed" || data.type === "error") {
         console.error("WebSocket认证失败:", data.message);
         uploadWebSocket.close();
         return;
       }
-      
+
       // 正常消息处理
       if (typeof onMessage === "function") {
         onMessage(data);

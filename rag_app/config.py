@@ -334,6 +334,15 @@ RABBITMQ_ENABLED = env_bool("RAG_RABBITMQ_ENABLED", False)
 # 文件上传队列名称（RabbitMQ 中的队列名）
 RABBITMQ_QUEUE_NAME = "rag.file.upload"
 
+# 各操作队列名称
+RABBITMQ_QUEUE_FILE_DELETE = "rag.file.delete"
+RABBITMQ_QUEUE_BATCH_DELETE = "rag.file.batch_delete"
+RABBITMQ_QUEUE_USER_DELETE = "rag.user.delete"
+RABBITMQ_QUEUE_SESSION_EXPORT = "rag.session.export"
+
+# 会话导出临时文件目录
+EXPORT_TEMP_DIR = str(PROJECT_ROOT / "temp_exports")
+
 # 预取消息数量（Worker 一次从队列中获取的消息数，1=逐个处理）
 RABBITMQ_PREFETCH_COUNT = 1
 

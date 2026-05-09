@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, User, Mail, Lock, Shield, Trash2, Plus, X, Loader2, Search, RefreshCw, Users, UserCheck, AlertCircle } from "lucide-vue-next";
 
@@ -7,8 +7,8 @@ import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue";
 import { getCurrentUser, logout, replaceCurrentUser } from "@/services/auth";
 import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from "@/services/shell";
-import { createAdminUser, deleteAdminUser, fetchAdminUsers, getPreferences, savePreferences, updateAdminUser } from "@/services/user";
-import { createSession, deleteSession, fetchSessions } from "@/services/workspace";
+import { createAdminUser, deleteAdminUser, deleteAdminUserAsync, fetchAdminUsers, getPreferences, savePreferences, updateAdminUser } from "@/services/user";
+import { createSession, deleteSession, fetchSessions, connectUploadWebSocket, addUploadWsListener, removeUploadWsListener, disconnectUploadWebSocket } from "@/services/workspace";
 
 const router = useRouter();
 const user = ref(getCurrentUser());
@@ -171,7 +171,24 @@ async function confirmDeleteUser() {
   const u = userPendingDelete.value;
   deleteDialogVisible.value = false;
   deletingUserId.value = u.id;
-  try { await deleteAdminUser(u.id); await refreshUsers(); } finally { deletingUserId.value = ""; }
+  try {
+    const result = await deleteAdminUserAsync(u.id);
+    if (result.task_id) {
+      // 异步模式：等待 WebSocket user_delete_complete 事件
+    } else {
+      await refreshUsers();
+      deletingUserId.value = "";
+    }
+  } catch {
+    deletingUserId.value = "";
+  }
+}
+
+function handleUserWsMessage(data) {
+  if (data.type === "user_delete_complete") {
+    deletingUserId.value = "";
+    refreshUsers();
+  }
 }
 
 // Session 相关逻辑优化：使用 localStorage 替代 URL query
@@ -224,6 +241,13 @@ onMounted(async () => {
   } finally {
     pageLoading.value = false;
   }
+
+  connectUploadWebSocket();
+  addUploadWsListener(handleUserWsMessage);
+});
+
+onUnmounted(() => {
+  removeUploadWsListener(handleUserWsMessage);
 });
 </script>
 

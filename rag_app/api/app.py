@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -415,33 +416,27 @@ class WebSocketManager:
         with self._lock:
             self._last_activity[user_id] = time.time()
 
-    async def send_upload_progress(self, user_id: str, progress_data: dict):
-        """发送上传进度到指定用户"""
+    async def send_event(self, user_id: str, event_type: str, data: dict):
+        """发送任意类型事件到指定用户"""
         with self._lock:
             websocket = self._connections.get(user_id)
         if websocket:
             try:
                 await websocket.send_json({
-                    "type": "upload_progress",
-                    **progress_data,
+                    "type": event_type,
+                    **data,
                 })
                 self.update_activity(user_id)
             except Exception:
                 self.disconnect(user_id)
 
+    async def send_upload_progress(self, user_id: str, progress_data: dict):
+        """发送上传进度到指定用户"""
+        await self.send_event(user_id, "upload_progress", progress_data)
+
     async def send_upload_complete(self, user_id: str, complete_data: dict):
         """发送上传完成通知到指定用户"""
-        with self._lock:
-            websocket = self._connections.get(user_id)
-        if websocket:
-            try:
-                await websocket.send_json({
-                    "type": "upload_complete",
-                    **complete_data,
-                })
-                self.update_activity(user_id)
-            except Exception:
-                self.disconnect(user_id)
+        await self.send_event(user_id, "upload_complete", complete_data)
     
     def get_connection_count(self) -> int:
         """获取当前连接数"""
@@ -528,7 +523,20 @@ async def lifespan(app: FastAPI):
         workspace_service.cleanup_stale_upload_registries(startup_db)
     finally:
         startup_db.close()
-    
+
+    # 清理过期的导出临时文件
+    try:
+        if os.path.isdir(config.EXPORT_TEMP_DIR):
+            for entry_name in os.listdir(config.EXPORT_TEMP_DIR):
+                entry_path = os.path.join(config.EXPORT_TEMP_DIR, entry_name)
+                try:
+                    if os.path.isfile(entry_path):
+                        os.remove(entry_path)
+                except OSError:
+                    pass
+    except Exception:
+        logger.warning("清理导出临时目录失败", exc_info=True)
+
     # 初始化RagService
     app.state.rag_service = RagService(redis_service=redis_service)
     
@@ -548,12 +556,15 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(2)
             
             if connected:
-                # 启动消费者处理上传任务
                 await queue_service.start_consumer(async_process_upload_message)
+                await queue_service.start_consumer(async_process_delete_file, config.RABBITMQ_QUEUE_FILE_DELETE)
+                await queue_service.start_consumer(async_process_batch_delete, config.RABBITMQ_QUEUE_BATCH_DELETE)
+                await queue_service.start_consumer(async_process_delete_user, config.RABBITMQ_QUEUE_USER_DELETE)
+                await queue_service.start_consumer(async_process_export_session, config.RABBITMQ_QUEUE_SESSION_EXPORT)
                 app.state.queue_service = queue_service
-                logger.info("RabbitMQ消费者已启动")
+                logger.info("RabbitMQ消费者已启动(5个队列)")
             else:
-                logger.warning("RabbitMQ连接失败,文件上传将使用BackgroundTasks处理")
+                logger.warning("RabbitMQ连接失败,所有异步操作将使用BackgroundTasks处理")
         except Exception as e:
             logger.error(f"RabbitMQ初始化失败: {e}")
     
@@ -1070,20 +1081,41 @@ def create_app() -> FastAPI:
     @app.delete("/api/admin/users/{user_id}")
     def delete_admin_user(
         user_id: str,
+        background_tasks: BackgroundTasks,
         admin=Depends(get_current_admin),
         database: Session = Depends(get_db),
     ):
-        try:
-            target_user = user_service.require_user(database, user_id)
-            target_name = target_user.name
-            user_service.delete_user(database, admin, user_id)
-        except ValueError as exc:
-            build_error(status.HTTP_400_BAD_REQUEST, str(exc))
-        except PermissionError as exc:
-            build_error(status.HTTP_403_FORBIDDEN, str(exc))
+        target_user = user_service.require_user(database, user_id)
+        target_name = target_user.name
+
+        if target_user.id == admin.id:
+            build_error(status.HTTP_400_BAD_REQUEST, "管理员不能删除当前登录账号。")
+        if target_user.is_admin and user_service.count_admin_users(database) <= 1:
+            build_error(status.HTTP_400_BAD_REQUEST, "系统至少需要保留一个管理员账号。")
+
+        task_id = str(uuid.uuid4())
+        message_data = {
+            "task_id": task_id,
+            "admin_id": admin.id,
+            "target_user_id": user_id,
+            "target_user_name": target_name,
+        }
+
+        if config.RABBITMQ_ENABLED:
+            from rag_app.services.queue_service import get_queue_service as _get_qs
+            background_tasks.add_task(
+                _safe_publish,
+                _get_qs(), message_data, config.RABBITMQ_QUEUE_USER_DELETE,
+                lambda: process_delete_user_background(task_id, admin.id, user_id, target_name),
+            )
+        else:
+            background_tasks.add_task(
+                process_delete_user_background, task_id, admin.id, user_id, target_name
+            )
 
         return {
-            "message": f"已删除用户「{target_name}」。",
+            "message": f"用户「{target_name}」删除任务已提交。",
+            "task_id": task_id,
         }
 
     @app.get("/api/sessions")
@@ -1132,68 +1164,45 @@ def create_app() -> FastAPI:
     def export_session(
         session_id: str,
         request: Request,
+        background_tasks: BackgroundTasks,
         user=Depends(get_current_user),
         database: Session = Depends(get_db),
     ):
-        """优化 #20: 导出对话记录为 CSV 或 JSON"""
-        from rag_app.storage.chat_history import load_session_messages
-        
+        """优化 #20: 导出对话记录为 CSV 或 JSON（异步处理）"""
         try:
             session = workspace_service.require_session(database, user, session_id)
         except ValueError as exc:
             build_error(status.HTTP_404_NOT_FOUND, str(exc))
-        
-        # 获取导出格式参数
+
         query_params = request.query_params
         export_format = query_params.get("format", "json").lower()
-        
-        # 加载消息
-        messages = load_session_messages(session_id)
-        
-        if export_format == "csv":
-            # CSV 格式导出
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # 写入表头
-            writer.writerow(["角色", "内容", "时间戳"])
-            
-            # 写入消息
-            for msg in messages:
-                writer.writerow([
-                    "用户" if msg["role"] == "user" else "助手",
-                    msg["content"],
-                    ""
-                ])
-            
-            # 生成CSV文件
-            csv_content = output.getvalue()
-            output.close()
-            
-            filename = f"chat_{session_id[:8]}.csv"
-            headers = {
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Type": "text/csv; charset=utf-8-sig",
-            }
-            return Response(content=csv_content.encode("utf-8-sig"), headers=headers)
-        
+        if export_format not in ("json", "csv"):
+            build_error(status.HTTP_400_BAD_REQUEST, "导出格式只支持 json 或 csv。")
+
+        task_id = str(uuid.uuid4())
+
+        message = {
+            "task_id": task_id,
+            "user_id": user.id,
+            "session_id": session_id,
+            "session_title": session.title,
+            "format": export_format,
+        }
+
+        if config.RABBITMQ_ENABLED:
+            from rag_app.services.queue_service import get_queue_service as _get_qs
+            background_tasks.add_task(
+                _safe_publish,
+                _get_qs(), message, config.RABBITMQ_QUEUE_SESSION_EXPORT,
+                lambda: process_export_session_background(message),
+            )
         else:
-            # JSON 格式导出（默认）
-            export_data = {
-                "session_id": session_id,
-                "title": session.title,
-                "message_count": len(messages),
-                "exported_at": datetime.now(timezone.utc).isoformat(),
-                "messages": messages,
-            }
-            
-            json_content = json.dumps(export_data, ensure_ascii=False, indent=2)
-            filename = f"chat_{session_id[:8]}.json"
-            headers = {
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Type": "application/json; charset=utf-8",
-            }
-            return Response(content=json_content.encode("utf-8"), headers=headers)
+            background_tasks.add_task(process_export_session_background, message)
+
+        return {
+            "message": "导出任务已提交。",
+            "task_id": task_id,
+        }
 
     @app.post("/api/sessions/{session_id}/ask")
     def ask_session(
@@ -1621,6 +1630,43 @@ def create_app() -> FastAPI:
             for upload in files:
                 await upload.close()
 
+    @app.get("/api/exports/{export_id}/download")
+    def download_export(
+        export_id: str,
+        user=Depends(get_current_user),
+    ):
+        entry = _export_registry.get(export_id)
+        if entry is None:
+            build_error(status.HTTP_404_NOT_FOUND, "导出文件不存在或已过期。")
+        if entry["user_id"] != user.id:
+            build_error(status.HTTP_403_FORBIDDEN, "无权下载此文件。")
+
+        filepath = entry["filepath"]
+        filename = entry["filename"]
+        if not os.path.isfile(filepath):
+            build_error(status.HTTP_404_NOT_FOUND, "导出文件已过期，请重新导出。")
+
+        content_type = "text/csv; charset=utf-8-sig" if filename.endswith(".csv") else "application/json; charset=utf-8"
+
+        def iterfile():
+            with open(filepath, "rb") as f:
+                yield from f
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+            _export_registry.pop(export_id, None)
+
+        from urllib.parse import quote
+        encoded_filename = quote(filename, safe="")
+        return StreamingResponse(
+            iterfile(),
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                "Content-Type": content_type,
+            },
+        )
+
     _register_upload_routes(app)
     return app
 
@@ -1942,10 +1988,423 @@ def process_uploads_background(file_data_list: list[dict], user_id: str):
         db_session.close()
 
 
+# ============================================================
+# 异步消费者回调 + 同步回退函数
+# ============================================================
+
+async def async_process_delete_file(message: dict):
+    """处理单个文件删除消息(异步)"""
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    upload_id = message.get("upload_id")
+    filename = message.get("filename")
+    vector_doc_id = message.get("vector_doc_id")
+
+    try:
+        await websocket_manager.send_event(user_id, "delete_progress", {
+            "task_id": task_id,
+            "upload_id": upload_id,
+            "filename": filename,
+            "status": "processing",
+        })
+
+        db_session = SessionLocal()
+        try:
+            kb_service = KnowledgeBaseService(user_id, redis_service=redis_service)
+            loop = asyncio.get_event_loop()
+            delete_result = await loop.run_in_executor(
+                None,
+                lambda: kb_service.delete_document(document_id=vector_doc_id)
+            )
+            workspace_service.delete_upload_with_registry_by_id(db_session, upload_id)
+            db_session.commit()
+
+            await websocket_manager.send_event(user_id, "delete_complete", {
+                "task_id": task_id,
+                "upload_id": upload_id,
+                "filename": filename,
+                "status": "success",
+                "message": delete_result.get("message", "文件已删除。"),
+                "deleted_chunks": delete_result.get("deleted_chunks", 0),
+            })
+        finally:
+            db_session.close()
+    except Exception as e:
+        logger.exception("删除文件失败: %s", filename)
+        await websocket_manager.send_event(user_id, "delete_complete", {
+            "task_id": task_id,
+            "upload_id": upload_id,
+            "filename": filename,
+            "status": "error",
+            "message": "删除失败，请稍后重试。",
+        })
+
+
+async def async_process_batch_delete(message: dict):
+    """处理批量文件删除消息(异步)"""
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    uploads = message.get("uploads", [])
+
+    total = len(uploads)
+    await websocket_manager.send_event(user_id, "batch_delete_progress", {
+        "task_id": task_id,
+        "status": "processing",
+        "current": 0,
+        "total": total,
+    })
+
+    deleted_items = []
+    failed_items = []
+
+    db_session = SessionLocal()
+    try:
+        kb_service = KnowledgeBaseService(user_id, redis_service=redis_service)
+        loop = asyncio.get_event_loop()
+
+        for idx, upload in enumerate(uploads):
+            upload_id = upload["id"]
+            filename = upload.get("filename", "")
+            vector_doc_id = upload.get("vector_doc_id", "")
+
+            await websocket_manager.send_event(user_id, "batch_delete_progress", {
+                "task_id": task_id,
+                "status": "processing",
+                "current": idx + 1,
+                "total": total,
+                "current_file": filename,
+            })
+
+            try:
+                if vector_doc_id:
+                    await loop.run_in_executor(
+                        None,
+                        lambda vid=vector_doc_id: kb_service.delete_document(document_id=vid)
+                    )
+                workspace_service.delete_upload_with_registry_by_id(db_session, upload_id)
+                deleted_items.append({"id": upload_id, "name": filename})
+            except Exception:
+                logger.exception("批量删除文件失败: %s", filename)
+                failed_items.append({"id": upload_id, "name": filename, "message": "删除失败，请稍后重试。"})
+
+        db_session.commit()
+        uploads_list = workspace_service.list_uploads_raw(db_session, user_id)
+    finally:
+        db_session.close()
+
+    await websocket_manager.send_event(user_id, "batch_delete_complete", {
+        "task_id": task_id,
+        "status": "done",
+        "deleted": deleted_items,
+        "failed": failed_items,
+        "uploads": uploads_list,
+    })
+
+
+async def async_process_delete_user(message: dict):
+    """处理用户删除消息(异步)"""
+    task_id = message.get("task_id")
+    admin_id = message.get("admin_id")
+    target_user_id = message.get("target_user_id")
+    target_user_name = message.get("target_user_name")
+
+    try:
+        await websocket_manager.send_event(admin_id, "user_delete_progress", {
+            "task_id": task_id,
+            "status": "processing",
+        })
+
+        db_session = SessionLocal()
+        try:
+            actor = db_session.get(User, admin_id)
+            if actor is None:
+                raise ValueError("管理员账号不存在。")
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: user_service.delete_user(db_session, actor, target_user_id)
+            )
+
+            await websocket_manager.send_event(admin_id, "user_delete_complete", {
+                "task_id": task_id,
+                "status": "success",
+                "message": f"已删除用户「{target_user_name}」。",
+            })
+        finally:
+            db_session.close()
+    except Exception as e:
+        logger.exception("删除用户失败: %s", target_user_name)
+        await websocket_manager.send_event(admin_id, "user_delete_complete", {
+            "task_id": task_id,
+            "status": "error",
+            "message": f"删除用户「{target_user_name}」失败: {str(e)}",
+        })
+
+
+async def async_process_export_session(message: dict):
+    """处理会话导出消息(异步)"""
+    from rag_app.storage.chat_history import load_session_messages
+
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    session_id = message.get("session_id")
+    session_title = message.get("session_title", "")
+    export_format = message.get("format", "json")
+
+    try:
+        await websocket_manager.send_event(user_id, "export_progress", {
+            "task_id": task_id,
+            "status": "processing",
+        })
+
+        messages_data = load_session_messages(session_id)
+
+        os.makedirs(config.EXPORT_TEMP_DIR, exist_ok=True)
+        safe_title = "".join(c for c in session_title if c.isalnum() or c in "._- ")[:40]
+        filename = f"chat_{safe_title}_{session_id[:8]}.{export_format}"
+        filepath = os.path.join(config.EXPORT_TEMP_DIR, f"{task_id}_{filename}")
+
+        if export_format == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["角色", "内容"])
+            for msg in messages_data:
+                writer.writerow([
+                    "用户" if msg["role"] == "user" else "助手",
+                    msg["content"],
+                ])
+            with open(filepath, "w", encoding="utf-8-sig") as f:
+                f.write(output.getvalue())
+            output.close()
+        else:
+            export_data = {
+                "session_id": session_id,
+                "title": session_title,
+                "message_count": len(messages_data),
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "messages": messages_data,
+            }
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+
+        _export_registry[task_id] = {
+            "user_id": user_id,
+            "filepath": filepath,
+            "filename": filename,
+        }
+
+        await websocket_manager.send_event(user_id, "export_complete", {
+            "task_id": task_id,
+            "status": "success",
+            "download_url": f"/exports/{task_id}/download",
+            "filename": filename,
+        })
+    except Exception as e:
+        logger.exception("导出会话失败: %s", session_id)
+        await websocket_manager.send_event(user_id, "export_complete", {
+            "task_id": task_id,
+            "status": "error",
+            "message": f"导出失败: {str(e)}",
+        })
+
+
+# 导出临时文件注册表 {export_id: {user_id, filepath, filename}}
+_export_registry: dict[str, dict] = {}
+
+
+async def _safe_publish(queue_service, message: dict, queue_name: str, fallback):
+    """安全发布到RabbitMQ,失败时自动回退到同步处理"""
+    try:
+        ok = await queue_service.publish(message, queue_name=queue_name)
+        if not ok:
+            logger.warning("RabbitMQ发布失败,回退到同步处理")
+            fallback()
+    except Exception:
+        logger.exception("RabbitMQ发布异常,回退到同步处理")
+        fallback()
+
+
+# ============================================================
+# 同步回退函数 (BackgroundTasks)
+# ============================================================
+
+def process_delete_file_background(message: dict):
+    """后台同步处理单个文件删除"""
+    import asyncio as async_module
+
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    upload_id = message.get("upload_id")
+    filename = message.get("filename")
+    vector_doc_id = message.get("vector_doc_id")
+
+    try:
+        async_module.run(websocket_manager.send_event(user_id, "delete_progress", {
+            "task_id": task_id, "upload_id": upload_id, "filename": filename, "status": "processing",
+        }))
+
+        db_session = SessionLocal()
+        try:
+            kb_service = KnowledgeBaseService(user_id, redis_service=redis_service)
+            delete_result = kb_service.delete_document(document_id=vector_doc_id)
+            workspace_service.delete_upload_with_registry_by_id(db_session, upload_id)
+            db_session.commit()
+
+            async_module.run(websocket_manager.send_event(user_id, "delete_complete", {
+                "task_id": task_id, "upload_id": upload_id, "filename": filename,
+                "status": "success",
+                "message": delete_result.get("message", "文件已删除。"),
+                "deleted_chunks": delete_result.get("deleted_chunks", 0),
+            }))
+        finally:
+            db_session.close()
+    except Exception:
+        logger.exception("同步删除文件失败: %s", filename)
+        async_module.run(websocket_manager.send_event(user_id, "delete_complete", {
+            "task_id": task_id, "upload_id": upload_id, "filename": filename,
+            "status": "error", "message": "删除失败，请稍后重试。",
+        }))
+
+
+def process_batch_delete_background(message: dict):
+    """后台同步处理批量文件删除"""
+    import asyncio as async_module
+
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    uploads = message.get("uploads", [])
+
+    total = len(uploads)
+    async_module.run(websocket_manager.send_event(user_id, "batch_delete_progress", {
+        "task_id": task_id, "status": "processing", "current": 0, "total": total,
+    }))
+
+    deleted_items = []
+    failed_items = []
+
+    db_session = SessionLocal()
+    try:
+        kb_service = KnowledgeBaseService(user_id, redis_service=redis_service)
+        for idx, upload in enumerate(uploads):
+            upload_id_item = upload["id"]
+            filename = upload.get("filename", "")
+            vector_doc_id = upload.get("vector_doc_id", "")
+
+            async_module.run(websocket_manager.send_event(user_id, "batch_delete_progress", {
+                "task_id": task_id, "status": "processing",
+                "current": idx + 1, "total": total, "current_file": filename,
+            }))
+
+            try:
+                if vector_doc_id:
+                    kb_service.delete_document(document_id=vector_doc_id)
+                workspace_service.delete_upload_with_registry_by_id(db_session, upload_id_item)
+                deleted_items.append({"id": upload_id_item, "name": filename})
+            except Exception:
+                logger.exception("批量删除文件失败: %s", filename)
+                failed_items.append({"id": upload_id_item, "name": filename, "message": "删除失败，请稍后重试。"})
+
+        db_session.commit()
+        uploads_list = workspace_service.list_uploads_raw(db_session, user_id)
+    finally:
+        db_session.close()
+
+    async_module.run(websocket_manager.send_event(user_id, "batch_delete_complete", {
+        "task_id": task_id, "status": "done",
+        "deleted": deleted_items, "failed": failed_items, "uploads": uploads_list,
+    }))
+
+
+def process_delete_user_background(task_id: str, admin_id: str, target_user_id: str, target_user_name: str):
+    """后台同步处理用户删除"""
+    import asyncio as async_module
+
+    try:
+        async_module.run(websocket_manager.send_event(admin_id, "user_delete_progress", {
+            "task_id": task_id, "status": "processing",
+        }))
+
+        db_session = SessionLocal()
+        try:
+            actor = db_session.get(User, admin_id)
+            if actor is None:
+                raise ValueError("管理员账号不存在。")
+            user_service.delete_user(db_session, actor, target_user_id)
+            async_module.run(websocket_manager.send_event(admin_id, "user_delete_complete", {
+                "task_id": task_id, "status": "success",
+                "message": f"已删除用户「{target_user_name}」。",
+            }))
+        finally:
+            db_session.close()
+    except Exception as e:
+        logger.exception("同步删除用户失败: %s", target_user_name)
+        async_module.run(websocket_manager.send_event(admin_id, "user_delete_complete", {
+            "task_id": task_id, "status": "error",
+            "message": f"删除用户「{target_user_name}」失败: {str(e)}",
+        }))
+
+
+def process_export_session_background(message: dict):
+    """后台同步处理会话导出"""
+    import asyncio as async_module
+    from rag_app.storage.chat_history import load_session_messages
+
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    session_id = message.get("session_id")
+    session_title = message.get("session_title", "")
+    export_format = message.get("format", "json")
+
+    try:
+        async_module.run(websocket_manager.send_event(user_id, "export_progress", {
+            "task_id": task_id, "status": "processing",
+        }))
+
+        messages_data = load_session_messages(session_id)
+        os.makedirs(config.EXPORT_TEMP_DIR, exist_ok=True)
+        safe_title = "".join(c for c in session_title if c.isalnum() or c in "._- ")[:40]
+        filename = f"chat_{safe_title}_{session_id[:8]}.{export_format}"
+        filepath = os.path.join(config.EXPORT_TEMP_DIR, f"{task_id}_{filename}")
+
+        if export_format == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["角色", "内容"])
+            for msg in messages_data:
+                writer.writerow(["用户" if msg["role"] == "user" else "助手", msg["content"]])
+            with open(filepath, "w", encoding="utf-8-sig") as f:
+                f.write(output.getvalue())
+            output.close()
+        else:
+            export_data = {
+                "session_id": session_id, "title": session_title,
+                "message_count": len(messages_data),
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "messages": messages_data,
+            }
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+
+        _export_registry[task_id] = {"user_id": user_id, "filepath": filepath, "filename": filename}
+
+        async_module.run(websocket_manager.send_event(user_id, "export_complete", {
+            "task_id": task_id, "status": "success",
+            "download_url": f"/exports/{task_id}/download", "filename": filename,
+        }))
+    except Exception as e:
+        logger.exception("同步导出会话失败: %s", session_id)
+        async_module.run(websocket_manager.send_event(user_id, "export_complete", {
+            "task_id": task_id, "status": "error",
+            "message": f"导出失败: {str(e)}",
+        }))
+
+
 def _register_upload_routes(app: FastAPI):
     @app.delete("/api/uploads/{upload_id}")
     def delete_upload(
         upload_id: str,
+        background_tasks: BackgroundTasks,
         user=Depends(get_current_user),
         database: Session = Depends(get_db),
     ):
@@ -1954,66 +2413,82 @@ def _register_upload_routes(app: FastAPI):
         except ValueError as exc:
             build_error(status.HTTP_404_NOT_FOUND, str(exc))
 
-        try:
-            delete_result = delete_upload_entry(database, user, upload)
-        except Exception:
-            logger.exception("Failed to delete uploaded document.")
-            build_error(status.HTTP_500_INTERNAL_SERVER_ERROR, "删除知识库文件失败，请稍后重试。")
+        task_id = str(uuid.uuid4())
+        message = {
+            "task_id": task_id,
+            "user_id": user.id,
+            "upload_id": upload.id,
+            "filename": upload.filename,
+            "vector_doc_id": upload.vector_doc_id,
+        }
+
+        if config.RABBITMQ_ENABLED:
+            from rag_app.services.queue_service import get_queue_service as _get_qs
+            background_tasks.add_task(
+                _safe_publish,
+                _get_qs(), message, config.RABBITMQ_QUEUE_FILE_DELETE,
+                lambda: process_delete_file_background(message),
+            )
+        else:
+            background_tasks.add_task(process_delete_file_background, message)
 
         return {
-            "message": delete_result["message"],
-            "deleted_chunks": delete_result["deleted_chunks"],
-            "uploads": workspace_service.list_uploads(database, user),
+            "message": f"文件「{upload.filename}」删除任务已提交。",
+            "task_id": task_id,
         }
 
     @app.post("/api/uploads/batch-delete")
     def batch_delete_uploads(
         payload: BatchDeleteUploadsRequest,
+        background_tasks: BackgroundTasks,
         user=Depends(get_current_user),
         database: Session = Depends(get_db),
     ):
         upload_ids = payload.upload_ids
-
         uploads = workspace_service.list_upload_entities(database, user, upload_ids)
         upload_map = {upload.id: upload for upload in uploads}
 
-        deleted_items = []
-        failed_items = []
+        task_id = str(uuid.uuid4())
+        upload_items = []
+        failed_validation = []
+
         for upload_id in upload_ids:
             upload = upload_map.get(upload_id)
             if upload is None:
-                failed_items.append({
+                failed_validation.append({
                     "id": upload_id,
                     "message": "文件不存在，或不属于当前账号。",
                 })
                 continue
+            upload_items.append({
+                "id": upload.id,
+                "filename": upload.filename,
+                "vector_doc_id": upload.vector_doc_id,
+            })
 
-            try:
-                delete_result = delete_upload_entry(database, user, upload)
-                deleted_items.append({
-                    "id": upload.id,
-                    "name": upload.filename,
-                    "deleted_chunks": delete_result["deleted_chunks"],
-                })
-            except Exception:
-                logger.exception("Failed to delete uploaded document in batch.")
-                failed_items.append({
-                    "id": upload.id,
-                    "name": upload.filename,
-                    "message": "删除失败，请稍后重试。",
-                })
+        if not upload_items:
+            build_error(status.HTTP_400_BAD_REQUEST, "没有可删除的文件。")
 
-        summary_message = (
-            f"已删除 {len(deleted_items)} 个文件"
-            if not failed_items
-            else f"已删除 {len(deleted_items)} 个文件，{len(failed_items)} 个删除失败"
-        )
+        message = {
+            "task_id": task_id,
+            "user_id": user.id,
+            "uploads": upload_items,
+        }
+
+        if config.RABBITMQ_ENABLED:
+            from rag_app.services.queue_service import get_queue_service as _get_qs
+            background_tasks.add_task(
+                _safe_publish,
+                _get_qs(), message, config.RABBITMQ_QUEUE_BATCH_DELETE,
+                lambda: process_batch_delete_background(message),
+            )
+        else:
+            background_tasks.add_task(process_batch_delete_background, message)
 
         return {
-            "message": summary_message,
-            "deleted": deleted_items,
-            "failed": failed_items,
-            "uploads": workspace_service.list_uploads(database, user),
+            "message": f"批量删除任务已提交，共 {len(upload_items)} 个文件。",
+            "task_id": task_id,
+            "failed_validation": failed_validation if failed_validation else None,
         }
 
 

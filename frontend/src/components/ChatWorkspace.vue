@@ -1,8 +1,8 @@
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ArrowUp, Database, Sparkles, Square, Copy, Check, ChevronDown, FolderOpen, ArrowRight, StopCircle, Download } from "lucide-vue-next";
 import { renderMarkdown } from "@/services/markdown";
-import { exportSession, downloadFile } from "@/services/workspace";
+import { exportSession, exportSessionAsync, downloadExport, downloadFile, addUploadWsListener, removeUploadWsListener } from "@/services/workspace";
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -142,21 +142,54 @@ function closePopovers() {
   showModeMenu.value = false;
 }
 
+const exportTaskId = ref("");
+
 async function handleExport(format = "json") {
   if (!props.session?.id || exporting.value) return;
-  
+
   exporting.value = true;
   try {
-    const blob = await exportSession(props.session.id, format);
-    const filename = `chat_${props.session.id.slice(0, 8)}.${format}`;
-    downloadFile(blob, filename);
+    const result = await exportSessionAsync(props.session.id, format);
+    if (result.task_id) {
+      exportTaskId.value = result.task_id;
+      // 等待 WebSocket export_complete 事件触发下载
+    } else {
+      // 同步回退
+      const blob = await exportSession(props.session.id, format);
+      const filename = `chat_${props.session.id.slice(0, 8)}.${format}`;
+      downloadFile(blob, filename);
+      exporting.value = false;
+    }
   } catch (error) {
     console.error("导出失败:", error);
     alert(error.message || "导出失败，请稍后重试");
-  } finally {
     exporting.value = false;
   }
 }
+
+function handleExportWsMessage(data) {
+  if (data.type === "export_complete" && data.task_id === exportTaskId.value) {
+    exporting.value = false;
+    exportTaskId.value = "";
+    if (data.status === "success" && data.download_url) {
+      downloadExport(data.download_url).then((blob) => {
+        downloadFile(blob, data.filename || "export.json");
+      }).catch(() => {
+        alert("下载导出文件失败，请重试。");
+      });
+    } else {
+      alert(data.message || "导出失败，请重试。");
+    }
+  }
+}
+
+onMounted(() => {
+  addUploadWsListener(handleExportWsMessage);
+});
+
+onUnmounted(() => {
+  removeUploadWsListener(handleExportWsMessage);
+});
 
 watch(() => messageScrollSignature.value, async () => {
   await nextTick();

@@ -445,6 +445,22 @@ class WorkspaceService:
             database.delete(registry)
         database.commit()
 
+    def delete_upload_with_registry_by_id(self, database: Session, upload_id: str):
+        upload = database.get(UploadedDocument, upload_id)
+        if upload is None:
+            raise ValueError(f"上传记录不存在: {upload_id}")
+        self.delete_upload_with_registry(database, upload)
+
+    def list_uploads_raw(self, database: Session, user_id: str) -> list[dict]:
+        statement = (
+            select(UploadedDocument)
+            .options(selectinload(UploadedDocument.uploader))
+            .where(UploadedDocument.uploader_id == user_id)
+            .order_by(desc(UploadedDocument.created_at))
+        )
+        uploads = database.scalars(statement).all()
+        return [self.serialize_upload(upload) for upload in uploads]
+
     def serialize_upload(self, upload: UploadedDocument) -> dict:
         return {
             "id": upload.id,

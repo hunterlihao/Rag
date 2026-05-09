@@ -13,6 +13,7 @@ import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from 
 import { getPreferences, savePreferences } from "@/services/user";
 import {
   createSession, deleteSession, deleteUpload, deleteUploads,
+  deleteUploadAsync, deleteUploadsAsync,
   fetchBackendMeta, fetchSessions, fetchUploads, formatRelativeTime, uploadFileWithProgress,
   connectUploadWebSocket, addUploadWsListener, removeUploadWsListener, disconnectUploadWebSocket,
 } from "@/services/workspace";
@@ -324,15 +325,21 @@ function deleteKnowledgeFile(file) {
       deleteDialogVisible.value = false;
       deletingUploadId.value = file.id;
       try {
-        await deleteUpload(file.id);
-        await refreshUploads();
-        deleteSuccessDialogState.value = {
-          title: "删除成功",
-          message: `「${file.name}」已从知识库中移除。`,
-          items: [],
-        };
-        deleteSuccessDialogVisible.value = true;
-      } finally {
+        const result = await deleteUploadAsync(file.id);
+        if (result.task_id) {
+          // 异步模式：等待 WebSocket delete_complete 事件刷新列表
+        } else {
+          // 同步回退
+          await refreshUploads();
+          deleteSuccessDialogState.value = {
+            title: "删除成功",
+            message: `「${file.name}」已从知识库中移除。`,
+            items: [],
+          };
+          deleteSuccessDialogVisible.value = true;
+          deletingUploadId.value = "";
+        }
+      } catch {
         deletingUploadId.value = "";
       }
     },
@@ -355,17 +362,23 @@ function batchDeleteKnowledgeFiles() {
       deleteDialogVisible.value = false;
       batchDeleting.value = true;
       try {
-        await deleteUploads(ids);
-        selectedUploadIds.value = [];
-        await refreshUploads();
-        const count = ids.length;
-        deleteSuccessDialogState.value = {
-          title: "删除成功",
-          message: count === 1 ? `「${allItems[0].name}」已从知识库中移除。` : `${count} 个文件已从知识库中移除。`,
-          items: allItems.slice(0, 4),
-        };
-        deleteSuccessDialogVisible.value = true;
-      } finally {
+        const result = await deleteUploadsAsync(ids);
+        if (result.task_id) {
+          // 异步模式：等待 WebSocket batch_delete_complete 事件
+        } else {
+          // 同步回退
+          await refreshUploads();
+          selectedUploadIds.value = [];
+          batchDeleting.value = false;
+          const count = ids.length;
+          deleteSuccessDialogState.value = {
+            title: "删除完成",
+            message: count === 1 ? `「${allItems[0].name}」已从知识库中移除。` : `${count} 个文件已从知识库中移除。`,
+            items: allItems.slice(0, 4),
+          };
+          deleteSuccessDialogVisible.value = true;
+        }
+      } catch {
         batchDeleting.value = false;
       }
     },
@@ -524,6 +537,40 @@ function handleUploadWsMessage(data) {
         t.status !== "duplicate"  // 重复文件也在5秒后清理
       );
     }, 5000);
+  } else if (data.type === "delete_progress") {
+    // 单个文件删除进度
+    if (deletingUploadId.value === data.upload_id) {
+      // 保持 deletingUploadId 以显示 loading 状态
+    }
+  } else if (data.type === "delete_complete") {
+    deletingUploadId.value = "";
+    if (data.status === "success") {
+      refreshUploads();
+      deleteSuccessDialogState.value = {
+        title: "删除成功",
+        message: data.message || `「${data.filename}」已从知识库中移除。`,
+        items: [],
+      };
+      deleteSuccessDialogVisible.value = true;
+    }
+  } else if (data.type === "batch_delete_progress") {
+    batchDeleting.value = true;
+  } else if (data.type === "batch_delete_complete") {
+    batchDeleting.value = false;
+    selectedUploadIds.value = [];
+    refreshUploads();
+    const deletedCount = (data.deleted || []).length;
+    const failedCount = (data.failed || []).length;
+    if (deletedCount > 0 || failedCount === 0) {
+      deleteSuccessDialogState.value = {
+        title: "删除完成",
+        message: failedCount > 0
+          ? `已删除 ${deletedCount} 个文件，${failedCount} 个删除失败`
+          : `已删除 ${deletedCount} 个文件。`,
+        items: (data.deleted || []).slice(0, 4).map((item) => ({ name: item.name })),
+      };
+      deleteSuccessDialogVisible.value = true;
+    }
   }
 }
 
