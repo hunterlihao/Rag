@@ -253,6 +253,13 @@ class RedisService:
         key = self._key("collection", "meta", user_id)
         self._run(self.client.delete, key)
     
+    def invalidate_upload_sha256_all(self, user_id: str):
+        """清理用户所有上传SHA256缓存(删除所有文档后调用)"""
+        pattern = self._key("upload", "sha256", user_id, "*")
+        keys = self._run(self.client.keys, pattern)
+        if keys:
+            self._run(self.client.delete, *keys)
+    
     # ========== 优化7: 问答意图分类缓存 ==========
     def get_query_intent(self, query_text: str) -> str | None:
         """获取查询意图分类"""

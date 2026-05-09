@@ -20,6 +20,7 @@ const emit = defineEmits(["update:modelValue", "confirm"]);
 
 const isPrimary = computed(() => props.tone === "primary");
 const isSuccess = computed(() => props.tone === "success");
+const isWarning = computed(() => props.tone === "warning");
 
 function closeDialog() {
   if (props.loading) return;
@@ -41,14 +42,15 @@ function handleConfirm() {
 
       <!-- Icon header -->
       <div class="flex items-center gap-3 mb-4">
-        <div :class="['w-10 h-10 rounded-full flex items-center justify-center', isSuccess ? 'bg-green-50' : isPrimary ? 'bg-zinc-100' : 'bg-red-50']">
+        <div :class="['w-10 h-10 rounded-full flex items-center justify-center', isSuccess ? 'bg-green-50' : isWarning ? 'bg-amber-50' : isPrimary ? 'bg-zinc-100' : 'bg-red-50']">
           <CheckCircle v-if="isSuccess" class="w-5 h-5 text-green-500" />
+          <AlertCircle v-else-if="isWarning" class="w-5 h-5 text-amber-500" />
           <LogOut v-else-if="isPrimary" class="w-5 h-5 text-zinc-500" />
           <AlertTriangle v-else class="w-5 h-5 text-red-500" />
         </div>
         <div>
           <h3 class="text-lg font-semibold text-zinc-900">{{ title }}</h3>
-          <span :class="['inline-block px-2 py-0.5 rounded-full text-xs font-medium mt-0.5', isSuccess ? 'bg-green-50 text-green-600' : isPrimary ? 'bg-zinc-100 text-zinc-600' : 'bg-red-50 text-red-600']">{{ badgeText }}</span>
+          <span :class="['inline-block px-2 py-0.5 rounded-full text-xs font-medium mt-0.5', isSuccess ? 'bg-green-50 text-green-600' : isWarning ? 'bg-amber-50 text-amber-600' : isPrimary ? 'bg-zinc-100 text-zinc-600' : 'bg-red-50 text-red-600']">{{ badgeText }}</span>
         </div>
       </div>
 
@@ -70,10 +72,10 @@ function handleConfirm() {
 
       <!-- Actions -->
       <div class="flex gap-3">
-        <button v-if="!isSuccess" @click="closeDialog" :disabled="loading" class="flex-1 px-4 py-2.5 border border-zinc-200 text-zinc-900 rounded-xl text-sm font-medium hover:bg-zinc-50 transition-colors disabled:opacity-50">
+        <button v-if="!isSuccess && !isWarning" @click="closeDialog" :disabled="loading" class="flex-1 px-4 py-2.5 border border-zinc-200 text-zinc-900 rounded-xl text-sm font-medium hover:bg-zinc-50 transition-colors disabled:opacity-50">
           {{ cancelText }}
         </button>
-        <button @click="handleConfirm" :disabled="loading" :class="['flex-1 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-70', isSuccess ? 'bg-green-500 hover:bg-green-600' : isPrimary ? 'bg-zinc-900 hover:bg-zinc-800' : 'bg-red-500 hover:bg-red-600']">
+        <button @click="handleConfirm" :disabled="loading" :class="['flex-1 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-70', isSuccess ? 'bg-green-500 hover:bg-green-600' : isWarning ? 'bg-amber-500 hover:bg-amber-600' : isPrimary ? 'bg-zinc-900 hover:bg-zinc-800' : 'bg-red-500 hover:bg-red-600']">
           <svg v-if="loading" class="animate-spin w-4 h-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
           {{ loading ? '处理中...' : confirmText }}
         </button>

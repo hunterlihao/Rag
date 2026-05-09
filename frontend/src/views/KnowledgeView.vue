@@ -37,10 +37,14 @@ const deleteDialogVisible = ref(false);
 const deleteDialogState = ref({ tone: "danger", title: "", summary: "", hint: "", items: [], extra: "", confirmText: "确认删除", onConfirm: null });
 const successDialogVisible = ref(false);
 const successDialogState = ref({ title: "", message: "", items: [] });
+const warnDialogVisible = ref(false);
+const warnDialogState = ref({ title: "", message: "", items: [] });
+const deleteSuccessDialogVisible = ref(false);
+const deleteSuccessDialogState = ref({ title: "", message: "", items: [] });
 
-const sidebarBusy = computed(() => importBusy.value || batchDeleting.value || !!deletingUploadId.value || !!deletingSessionId.value);
+const sidebarBusy = computed(() => importBusy.value || !!deletingSessionId.value);
 const navItems = computed(() => buildSidebarNavItems(user.value));
-const pageBusy = computed(() => importBusy.value || batchDeleting.value || !!deletingUploadId.value || !!deletingSessionId.value);
+const pageBusy = computed(() => importBusy.value || !!deletingSessionId.value);
 
 const filteredSessions = computed(() => {
   const kw = sessionSearch.value.trim().toLowerCase();
@@ -78,8 +82,6 @@ const latestUploadText = computed(() => {
 
 const busyOverlayState = computed(() => {
   if (importBusy.value) return { visible: true, badgeText: "导入中", title: "正在导入文件", description: "文件正在上传并写入向量库，请等待完成。" };
-  if (batchDeleting.value) return { visible: true, badgeText: "删除中", title: "正在批量删除", description: "知识库文件正在移除，请等待完成。" };
-  if (deletingUploadId.value) return { visible: true, badgeText: "删除中", title: "正在删除文件", description: "文件正在从向量库中移除。" };
   if (deletingSessionId.value) return { visible: true, badgeText: "删除处理中", title: "正在删除会话", description: "会话记录正在清理。" };
   return { visible: false, badgeText: "", title: "", description: "" };
 });
@@ -214,6 +216,7 @@ async function importFiles(fileList) {
     });
 
     if (result.tasks) {
+      const duplicateFiles = [];
       result.tasks.forEach((task) => {
         const localTask = uploadTasks.value.find((t) => t.name === task.filename && t.status === "uploading");
         if (localTask) {
@@ -225,9 +228,18 @@ async function importFiles(fileList) {
             pendingTaskIds.value.add(task.task_id);
           } else if (task.status === "success" || task.status === "error" || task.status === "warning" || task.status === "duplicate") {
             localTask.progress = 100;
+            if (task.status === "duplicate") duplicateFiles.push(task.filename);
           }
         }
       });
+
+      if (duplicateFiles.length > 0) {
+        if (pendingTaskIds.value.size === 0) {
+          showDuplicateWarning(duplicateFiles);
+        } else {
+          pendingDuplicateFiles.value = [...pendingDuplicateFiles.value, ...duplicateFiles];
+        }
+      }
     }
 
     if (uploadTasks.value.every((t) => t.status !== "uploading" && t.status !== "processing")) {
@@ -256,6 +268,12 @@ function deleteKnowledgeFile(file) {
       try {
         await deleteUpload(file.id);
         await refreshUploads();
+        deleteSuccessDialogState.value = {
+          title: "删除成功",
+          message: `「${file.name}」已从知识库中移除。`,
+          items: [],
+        };
+        deleteSuccessDialogVisible.value = true;
       } finally {
         deletingUploadId.value = "";
       }
@@ -266,14 +284,14 @@ function deleteKnowledgeFile(file) {
 function batchDeleteKnowledgeFiles() {
   const ids = [...selectedUploadIds.value];
   if (!ids.length) return;
-  const items = ids.map((id) => {
+  const allItems = ids.map((id) => {
     const u = workspace.uploads.find((up) => up.id === id);
     return { id, name: u?.name || id };
-  }).slice(0, 4);
+  });
   openDeleteDialog({
     title: "批量删除文件",
     summary: `确认删除 ${ids.length} 个知识库文件吗？`,
-    items,
+    items: allItems.slice(0, 4),
     extra: ids.length > 4 ? `...等共 ${ids.length} 个文件` : "",
     onConfirm: async () => {
       deleteDialogVisible.value = false;
@@ -282,6 +300,13 @@ function batchDeleteKnowledgeFiles() {
         await deleteUploads(ids);
         selectedUploadIds.value = [];
         await refreshUploads();
+        const count = ids.length;
+        deleteSuccessDialogState.value = {
+          title: "删除成功",
+          message: count === 1 ? `「${allItems[0].name}」已从知识库中移除。` : `${count} 个文件已从知识库中移除。`,
+          items: allItems.slice(0, 4),
+        };
+        deleteSuccessDialogVisible.value = true;
       } finally {
         batchDeleting.value = false;
       }
@@ -316,11 +341,38 @@ watch(successDialogVisible, (v) => {
     successDialogState.value.items = [];
   }
 });
+watch(warnDialogVisible, (v) => {
+  if (!v) {
+    warnDialogState.value.title = "";
+    warnDialogState.value.message = "";
+    warnDialogState.value.items = [];
+  }
+});
+watch(deleteSuccessDialogVisible, (v) => {
+  if (!v) {
+    deleteSuccessDialogState.value.title = "";
+    deleteSuccessDialogState.value.message = "";
+    deleteSuccessDialogState.value.items = [];
+  }
+});
 
 // 处理 WebSocket 消息
 const pendingTaskIds = ref(new Set());
 let pendingSuccessCount = 0;
 const pendingSuccessFiles = ref([]);
+const pendingDuplicateFiles = ref([]);
+
+function showDuplicateWarning(fileNames) {
+  const count = fileNames.length;
+  warnDialogState.value = {
+    title: "文件已存在",
+    message: count === 1
+      ? `「${fileNames[0]}」已存在于知识库中，跳过导入。`
+      : `${count} 个文件已存在于知识库中，已跳过导入。`,
+    items: fileNames.map((name) => ({ name })),
+  };
+  warnDialogVisible.value = true;
+}
 
 function handleUploadWsMessage(data) {
   if (data.type === "upload_progress") {
@@ -358,7 +410,7 @@ function handleUploadWsMessage(data) {
       const fileNames = [...pendingSuccessFiles.value];
       pendingSuccessCount = 0;
       pendingSuccessFiles.value = [];
-      
+
       // 构建成功消息
       let message = "";
       const items = fileNames.map((name) => ({ name }));
@@ -367,13 +419,19 @@ function handleUploadWsMessage(data) {
       } else {
         message = `${count} 个文件已成功导入知识库`;
       }
-      
+
       successDialogState.value = {
         title: "导入成功",
         message,
         items,
       };
       successDialogVisible.value = true;
+    }
+
+    if (pendingTaskIds.value.size === 0 && pendingDuplicateFiles.value.length > 0) {
+      const dupes = [...pendingDuplicateFiles.value];
+      pendingDuplicateFiles.value = [];
+      showDuplicateWarning(dupes);
     }
 
     setTimeout(() => {
@@ -388,8 +446,8 @@ function handleUploadWsMessage(data) {
 }
 
 onBeforeRouteLeave((to, from, next) => {
-  if (pageBusy.value) {
-    if (!confirm("知识库操作正在进行，确定要离开当前页面吗？")) return next(false);
+  if (importBusy.value) {
+    if (!confirm("文件正在导入中，确定要离开当前页面吗？")) return next(false);
   }
   next();
 });
@@ -553,6 +611,30 @@ onUnmounted(() => {
       badge-text="文件导入成功"
       confirm-text="知道了"
       @confirm="successDialogVisible = false"
+    />
+
+    <!-- 重复文件提示对话框 -->
+    <DeleteConfirmDialog
+      v-model="warnDialogVisible"
+      tone="warning"
+      :title="warnDialogState.title"
+      :summary="warnDialogState.message"
+      :items="warnDialogState.items"
+      badge-text="文件已存在"
+      confirm-text="知道了"
+      @confirm="warnDialogVisible = false"
+    />
+
+    <!-- 删除成功提示对话框 -->
+    <DeleteConfirmDialog
+      v-model="deleteSuccessDialogVisible"
+      tone="success"
+      :title="deleteSuccessDialogState.title"
+      :summary="deleteSuccessDialogState.message"
+      :items="deleteSuccessDialogState.items"
+      badge-text="删除成功"
+      confirm-text="知道了"
+      @confirm="deleteSuccessDialogVisible = false"
     />
   </div>
 </template>

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy.orm import Session
 
 from rag_app import config
+from rag_app.exceptions import FileValidationError
 from rag_app.services.auth_service import AuthService
 from rag_app.services.knowledge_base import DUPLICATE_MESSAGE, KnowledgeBaseService
 from rag_app.services.rag_service import RagService
@@ -29,6 +30,7 @@ from rag_app.services.workspace_service import WorkspaceService
 from rag_app.storage.database import SessionLocal, get_db, init_database
 from rag_app.storage.models import User
 from rag_app.utils.logging_config import get_request_id, reset_log_context, set_log_context
+from rag_app.validators import validate_upload_file
 
 redis_service = RedisService()
 auth_service = AuthService(redis_service=redis_service)
@@ -521,14 +523,46 @@ async def lifespan(app: FastAPI):
         workspace_service.cleanup_stale_upload_registries(startup_db)
     finally:
         startup_db.close()
-    # 优化1-9: 初始化RagService时传入redis_service,启用Redis缓存
+    
+    # 初始化RagService
     app.state.rag_service = RagService(redis_service=redis_service)
+    
+    # 启动RabbitMQ消费者(如果启用)
+    if config.RABBITMQ_ENABLED:
+        try:
+            from rag_app.services.queue_service import get_queue_service
+            queue_service = get_queue_service()
+            
+            # 重试连接(最多3次)
+            connected = False
+            for attempt in range(3):
+                if await queue_service.connect():
+                    connected = True
+                    break
+                logger.warning(f"RabbitMQ连接失败,重试 {attempt + 1}/3...")
+                await asyncio.sleep(2)
+            
+            if connected:
+                # 启动消费者处理上传任务
+                await queue_service.start_consumer(async_process_upload_message)
+                app.state.queue_service = queue_service
+                logger.info("RabbitMQ消费者已启动")
+            else:
+                logger.warning("RabbitMQ连接失败,文件上传将使用BackgroundTasks处理")
+        except Exception as e:
+            logger.error(f"RabbitMQ初始化失败: {e}")
+    
     logger.info("Application startup completed.", extra={"event": "app.startup.completed"})
     try:
         yield
     finally:
         # 清理所有WebSocket连接
         await websocket_manager.cleanup_all()
+        
+        # 关闭RabbitMQ连接
+        if config.RABBITMQ_ENABLED and hasattr(app.state, 'queue_service'):
+            await app.state.queue_service.close()
+        
         logger.info("Application shutdown completed.", extra={"event": "app.shutdown.completed"})
 
 
@@ -1289,6 +1323,13 @@ def create_app() -> FastAPI:
         user=Depends(get_current_user),
         database: Session = Depends(get_db),
     ):
+        """
+        优化后的文件上传端点
+        - 完整的文件验证(扩展名、魔数、大小)
+        - 流式处理,避免内存溢出
+        - 使用FastAPI BackgroundTasks异步处理
+        - WebSocket实时推送进度
+        """
         if len(files) > config.MAX_UPLOAD_BATCH_FILES:
             build_error(
                 status.HTTP_400_BAD_REQUEST,
@@ -1297,44 +1338,56 @@ def create_app() -> FastAPI:
 
         prepared_uploads = []
         total_batch_size = 0
+        
+        # 第一阶段: 验证所有文件
         for order, upload in enumerate(files):
             filename = str(upload.filename or "").strip() or "未命名文件"
             content_type = upload.content_type or "unknown"
-                    
-            # 安全漏洞修复1: 验证文件扩展名
-            file_suffix = Path(filename).suffix.lower().lstrip(".")
-            if not file_suffix or file_suffix not in config.SUPPORTED_UPLOAD_EXTENSIONS:
-                build_error(
-                    status.HTTP_400_BAD_REQUEST,
-                    f"不支持的文件格式: {file_suffix or '无扩展名'}。支持的格式: {', '.join(config.SUPPORTED_UPLOAD_EXTENSIONS)}",
-                )
-                    
-            # 验证文件名安全性
-            if not re.match(r'^[\w\-\.\u4e00-\u9fa5\s]+$', filename):
-                build_error(status.HTTP_400_BAD_REQUEST, "文件名包含非法字符,请使用安全的文件名")
-                    
+            
             try:
+                # 获取文件大小
                 size_bytes = get_upload_size(upload)
+                
+                # 读取文件头部用于魔数验证
+                file_obj = upload.file
+                file_obj.seek(0)
+                file_header = file_obj.read(16)
+                file_obj.seek(0)
+                
+                # 完整的文件验证(扩展名、魔数、大小)
+                safe_filename, extension = validate_upload_file(
+                    file_header,
+                    filename,
+                    size_bytes,
+                    skip_magic_bytes=False  # 启用魔数验证
+                )
+                
+                total_batch_size += size_bytes
+                
+                prepared_uploads.append({
+                    "order": order,
+                    "upload": upload,
+                    "filename": safe_filename,
+                    "extension": extension,
+                    "content_type": content_type,
+                    "size_bytes": size_bytes,
+                })
+                
+            except FileValidationError as e:
+                logger.warning(f"文件验证失败: {filename}, {e.message}")
+                build_error(status.HTTP_400_BAD_REQUEST, e.message)
             except Exception:
-                logger.exception("Failed to read upload size.")
-                build_error(status.HTTP_400_BAD_REQUEST, f"读取文件大小失败:{filename},请重新选择文件。")
+                logger.exception(f"读取文件失败: {filename}")
+                build_error(status.HTTP_400_BAD_REQUEST, f"读取文件失败: {filename}")
 
-            total_batch_size += size_bytes
-            prepared_uploads.append({
-                "order": order,
-                "upload": upload,
-                "filename": filename,
-                "content_type": content_type,
-                "size_bytes": size_bytes,
-            })
-
+        # 验证总大小
         if total_batch_size > config.MAX_UPLOAD_BATCH_SIZE_BYTES:
             build_error(
                 status.HTTP_400_BAD_REQUEST,
                 f"单次上传总大小不能超过 {config.MAX_UPLOAD_BATCH_SIZE_MB} MB。",
             )
 
-        # 异步处理：先返回接收状态，然后在后台处理
+        # 第二阶段: 准备上传任务
         upload_tasks = []
         file_data_list = []
 
@@ -1360,9 +1413,19 @@ def create_app() -> FastAPI:
                     })
                     continue
 
-                # 读取文件内容到内存
-                file_content = item["upload"].file.read()
-                content_sha256 = hashlib.sha256(file_content).hexdigest()
+                # 流式读取文件内容并计算SHA256
+                file_obj = item["upload"].file
+                file_obj.seek(0)
+                
+                sha256_obj = hashlib.sha256()
+                file_chunks = []
+                
+                while chunk := file_obj.read(config.UPLOAD_STREAM_CHUNK_SIZE):
+                    sha256_obj.update(chunk)
+                    file_chunks.append(chunk)
+                
+                content_sha256 = sha256_obj.hexdigest()
+                file_content = b''.join(file_chunks)
 
                 # 检查是否重复
                 registry = workspace_service.reserve_upload_registry(
@@ -1418,19 +1481,46 @@ def create_app() -> FastAPI:
                     "registry_id": registry.id,
                     "file_content": file_content,
                     "uploader_name": user.name,
+                    "is_duplicate": False,
                 })
 
-            # 添加后台任务处理文件
+            # 第三阶段: 添加后台任务处理文件
             if file_data_list:
-                background_tasks.add_task(
-                    process_uploads_background,
-                    file_data_list,
-                    user.id,
-                )
+                if config.RABBITMQ_ENABLED:
+                    # 使用RabbitMQ异步处理
+                    try:
+                        from rag_app.services.queue_service import get_queue_service
+                        queue_service = get_queue_service()
+                        
+                        for file_data in file_data_list:
+                            # 编码文件内容
+                            if file_data.get("file_content"):
+                                import base64
+                                file_data["file_data"] = base64.b64encode(file_data["file_content"]).decode('utf-8')
+                                del file_data["file_content"]
+                            
+                            await queue_service.publish(file_data)
+                        
+                        logger.info(f"已发布 {len(file_data_list)} 个上传任务到RabbitMQ")
+                    except Exception as e:
+                        logger.error(f"RabbitMQ发布失败,回退到同步处理: {e}")
+                        background_tasks.add_task(
+                            process_uploads_background,
+                            file_data_list,
+                            user.id,
+                        )
+                else:
+                    # 使用BackgroundTasks处理
+                    background_tasks.add_task(
+                        process_uploads_background,
+                        file_data_list,
+                        user.id,
+                    )
 
             return {
                 "message": "文件已接收，正在后台处理。",
                 "tasks": upload_tasks,
+                "queue_enabled": config.RABBITMQ_ENABLED,
             }
         finally:
             for upload in files:
@@ -1438,6 +1528,208 @@ def create_app() -> FastAPI:
 
     _register_upload_routes(app)
     return app
+
+
+def process_upload_message(message: dict):
+    """处理RabbitMQ上传消息(同步包装)"""
+    import base64
+    
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    filename = message.get("filename")
+    is_duplicate = message.get("is_duplicate", False)
+    
+    try:
+        # 重复文件直接推送完成消息
+        if is_duplicate:
+            asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                "task_id": task_id,
+                "filename": filename,
+                "status": "duplicate",
+                "message": message.get("message", "文件已存在"),
+            }))
+            return
+        
+        # 发送处理中状态
+        asyncio.run(websocket_manager.send_upload_progress(user_id, {
+            "task_id": task_id,
+            "filename": filename,
+            "status": "processing",
+            "progress": 50,
+        }))
+        
+        # 解码文件内容
+        file_data = base64.b64decode(message.get("file_data", ""))
+        file_obj = io.BytesIO(file_data)
+        
+        # 处理文件
+        db_session = SessionLocal()
+        try:
+            upload_result = KnowledgeBaseService(user_id, redis_service=redis_service).upload_by_file(
+                file_obj,
+                filename,
+                content_sha256=message.get("content_sha256"),
+            )
+            
+            status_value = "success" if upload_result.get("document_id") else "warning"
+            message_text = str(upload_result.get("message", "")).strip()
+            
+            if status_value == "success":
+                upload_record = workspace_service.complete_upload(
+                    database=db_session,
+                    registry_id=message.get("registry_id"),
+                    vector_doc_id=upload_result.get("document_id"),
+                    filename=filename,
+                    content_type=message.get("content_type"),
+                    size_bytes=message.get("size_bytes"),
+                    content_sha256=upload_result.get("content_sha256"),
+                    status=status_value,
+                    message=message_text,
+                    uploader=db_session.get(User, user_id),
+                )
+                serialized = workspace_service.serialize_upload(upload_record)
+                db_session.commit()
+                
+                asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": "success",
+                    "upload": serialized,
+                }))
+            else:
+                workspace_service.release_upload_registry(
+                    database=db_session,
+                    registry_id=message.get("registry_id"),
+                )
+                asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": status_value,
+                    "message": message_text,
+                }))
+        finally:
+            db_session.close()
+            
+    except Exception as e:
+        logger.exception(f"处理上传消息失败: {filename}")
+        db_session = SessionLocal()
+        try:
+            workspace_service.release_upload_registry(
+                database=db_session,
+                registry_id=message.get("registry_id"),
+            )
+        finally:
+            db_session.close()
+        
+        asyncio.run(websocket_manager.send_upload_complete(user_id, {
+            "task_id": task_id,
+            "filename": filename,
+            "status": "error",
+            "message": "文件解析或写入知识库失败，请稍后重试。",
+        }))
+
+
+async def async_process_upload_message(message: dict):
+    """处理RabbitMQ上传消息(异步版本)"""
+    import base64
+    
+    task_id = message.get("task_id")
+    user_id = message.get("user_id")
+    filename = message.get("filename")
+    is_duplicate = message.get("is_duplicate", False)
+    
+    try:
+        # 重复文件直接推送完成消息
+        if is_duplicate:
+            await websocket_manager.send_upload_complete(user_id, {
+                "task_id": task_id,
+                "filename": filename,
+                "status": "duplicate",
+                "message": message.get("message", "文件已存在"),
+            })
+            return
+        
+        # 发送处理中状态
+        await websocket_manager.send_upload_progress(user_id, {
+            "task_id": task_id,
+            "filename": filename,
+            "status": "processing",
+            "progress": 50,
+        })
+        
+        # 解码文件内容
+        file_data = base64.b64decode(message.get("file_data", ""))
+        file_obj = io.BytesIO(file_data)
+        
+        # 处理文件(在线程池中执行同步操作)
+        db_session = SessionLocal()
+        try:
+            loop = asyncio.get_event_loop()
+            upload_result = await loop.run_in_executor(
+                None,
+                lambda: KnowledgeBaseService(user_id, redis_service=redis_service).upload_by_file(
+                    file_obj,
+                    filename,
+                    content_sha256=message.get("content_sha256"),
+                )
+            )
+            
+            status_value = "success" if upload_result.get("document_id") else "warning"
+            message_text = str(upload_result.get("message", "")).strip()
+            
+            if status_value == "success":
+                upload_record = workspace_service.complete_upload(
+                    database=db_session,
+                    registry_id=message.get("registry_id"),
+                    vector_doc_id=upload_result.get("document_id"),
+                    filename=filename,
+                    content_type=message.get("content_type"),
+                    size_bytes=message.get("size_bytes"),
+                    content_sha256=upload_result.get("content_sha256"),
+                    status=status_value,
+                    message=message_text,
+                    uploader=db_session.get(User, user_id),
+                )
+                serialized = workspace_service.serialize_upload(upload_record)
+                db_session.commit()
+                
+                await websocket_manager.send_upload_complete(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": "success",
+                    "upload": serialized,
+                })
+            else:
+                workspace_service.release_upload_registry(
+                    database=db_session,
+                    registry_id=message.get("registry_id"),
+                )
+                await websocket_manager.send_upload_complete(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": status_value,
+                    "message": message_text,
+                })
+        finally:
+            db_session.close()
+            
+    except Exception as e:
+        logger.exception(f"处理上传消息失败: {filename}")
+        db_session = SessionLocal()
+        try:
+            workspace_service.release_upload_registry(
+                database=db_session,
+                registry_id=message.get("registry_id"),
+            )
+        finally:
+            db_session.close()
+        
+        await websocket_manager.send_upload_complete(user_id, {
+            "task_id": task_id,
+            "filename": filename,
+            "status": "error",
+            "message": "文件解析或写入知识库失败，请稍后重试。",
+        })
 
 
 def process_uploads_background(file_data_list: list[dict], user_id: str):

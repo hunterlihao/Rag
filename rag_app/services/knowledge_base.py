@@ -219,6 +219,8 @@ class KnowledgeBaseService(object):
                         self.redis_service.invalidate_collection_meta(str(self.user_id))
                         # 清理向量检索缓存
                         self.redis_service.invalidate_vector_search(self.collection_name)
+                        # 清理所有SHA256缓存
+                        self.redis_service.invalidate_upload_sha256_all(str(self.user_id))
                     except Exception:
                         pass
                 
@@ -238,6 +240,11 @@ class KnowledgeBaseService(object):
             with lock:
                 result = self.chroma.get(where={"document_id": document_id})
                 chunk_ids = [str(item) for item in result.get("ids", [])]
+                
+                # 获取content_sha256用于清理缓存
+                content_sha256 = None
+                if result.get("metadatas") and len(result["metadatas"]) > 0:
+                    content_sha256 = result["metadatas"][0].get("content_sha256")
 
                 if chunk_ids:
                     self.chroma.delete(ids=chunk_ids)
@@ -246,6 +253,10 @@ class KnowledgeBaseService(object):
             if self.redis_service:
                 try:
                     self.redis_service.invalidate_collection_meta(str(self.user_id))
+                    # 清理SHA256去重缓存
+                    if content_sha256:
+                        sha256_key = self.redis_service._key("upload", "sha256", str(self.user_id), content_sha256)
+                        self.redis_service.client.delete(sha256_key)
                 except Exception:
                     pass
 

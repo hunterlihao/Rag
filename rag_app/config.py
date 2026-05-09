@@ -152,6 +152,13 @@ DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 
 REDIS_URL = os.getenv("RAG_REDIS_URL", "redis://127.0.0.1:6379/0").strip()
 REDIS_KEY_PREFIX = os.getenv("RAG_REDIS_KEY_PREFIX", "rag").strip() or "rag"
+
+# RabbitMQ消息队列配置
+RABBITMQ_URL = os.getenv("RAG_RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:5672/").strip()
+RABBITMQ_ENABLED = env_bool("RAG_RABBITMQ_ENABLED", False)
+RABBITMQ_QUEUE_NAME = "rag.file.upload"
+RABBITMQ_PREFETCH_COUNT = 1
+
 TRUST_PROXY_HEADERS = env_bool("RAG_TRUST_PROXY_HEADERS", False)
 TRUSTED_PROXY_IPS = {
     item.strip()
