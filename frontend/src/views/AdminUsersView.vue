@@ -26,6 +26,12 @@ const deleteSessionSuccessDialogState = reactive({
   message: "",
   items: [],
 });
+const deleteUserSuccessDialogVisible = ref(false);
+const deleteUserSuccessDialogState = reactive({
+  title: "",
+  message: "",
+  items: [],
+});
 const sessionSearch = ref("");
 const userKeyword = ref("");
 const activeSessionId = ref("");
@@ -188,8 +194,26 @@ function handleUserWsMessage(data) {
   if (data.type === "user_delete_complete") {
     deletingUserId.value = "";
     refreshUsers();
+    
+    // 显示删除成功弹窗
+    const userName = data.user_name || "用户";
+    deleteUserSuccessDialogState.value = {
+      title: "删除成功",
+      message: data.message || `用户「${userName}」已成功删除`,
+      items: [{ id: data.user_id, name: userName }],
+    };
+    deleteUserSuccessDialogVisible.value = true;
   }
 }
+
+// 清理删除成功弹窗状态
+watch(deleteUserSuccessDialogVisible, (v) => {
+  if (!v) {
+    deleteUserSuccessDialogState.value.title = "";
+    deleteUserSuccessDialogState.value.message = "";
+    deleteUserSuccessDialogState.value.items = [];
+  }
+});
 
 // Session 相关逻辑优化：使用 localStorage 替代 URL query
 const STORAGE_KEY_SESSION = "rag.admin.sessionId";
@@ -471,6 +495,18 @@ onUnmounted(() => {
       :items="userPendingDelete ? [{ id: userPendingDelete.id, name: userPendingDelete.name }] : []"
       extra="此操作不可恢复。"
       @confirm="confirmDeleteUser"
+    />
+    
+    <!-- 删除用户成功提示对话框 -->
+    <DeleteConfirmDialog
+      v-model="deleteUserSuccessDialogVisible"
+      tone="success"
+      :title="deleteUserSuccessDialogState.title"
+      :summary="deleteUserSuccessDialogState.message"
+      :items="deleteUserSuccessDialogState.items"
+      badge-text="删除成功"
+      confirm-text="知道了"
+      @confirm="deleteUserSuccessDialogVisible = false"
     />
   </div>
 </template>

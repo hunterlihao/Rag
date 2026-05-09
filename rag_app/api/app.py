@@ -2130,6 +2130,8 @@ async def async_process_delete_user(message: dict):
                 "task_id": task_id,
                 "status": "success",
                 "message": f"已删除用户「{target_user_name}」。",
+                "user_id": target_user_id,
+                "user_name": target_user_name,
             })
         finally:
             db_session.close()
@@ -2139,6 +2141,8 @@ async def async_process_delete_user(message: dict):
             "task_id": task_id,
             "status": "error",
             "message": f"删除用户「{target_user_name}」失败: {str(e)}",
+            "user_id": target_user_id,
+            "user_name": target_user_name,
         })
 
 
@@ -2334,6 +2338,8 @@ def process_delete_user_background(task_id: str, admin_id: str, target_user_id: 
             async_module.run(websocket_manager.send_event(admin_id, "user_delete_complete", {
                 "task_id": task_id, "status": "success",
                 "message": f"已删除用户「{target_user_name}」。",
+                "user_id": target_user_id,
+                "user_name": target_user_name,
             }))
         finally:
             db_session.close()
@@ -2342,6 +2348,8 @@ def process_delete_user_background(task_id: str, admin_id: str, target_user_id: 
         async_module.run(websocket_manager.send_event(admin_id, "user_delete_complete", {
             "task_id": task_id, "status": "error",
             "message": f"删除用户「{target_user_name}」失败: {str(e)}",
+            "user_id": target_user_id,
+            "user_name": target_user_name,
         }))
 
 
