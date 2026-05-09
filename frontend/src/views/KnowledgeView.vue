@@ -36,7 +36,7 @@ const selectedUploadIds = ref([]);
 const deleteDialogVisible = ref(false);
 const deleteDialogState = ref({ tone: "danger", title: "", summary: "", hint: "", items: [], extra: "", confirmText: "确认删除", onConfirm: null });
 const successDialogVisible = ref(false);
-const successDialogState = ref({ title: "", message: "" });
+const successDialogState = ref({ title: "", message: "", items: [] });
 
 const sidebarBusy = computed(() => importBusy.value || batchDeleting.value || !!deletingUploadId.value || !!deletingSessionId.value);
 const navItems = computed(() => buildSidebarNavItems(user.value));
@@ -181,14 +181,21 @@ async function importFiles(fileList) {
   const formData = new FormData();
   files.forEach((f) => formData.append("files", f));
 
+  const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+
   try {
     const result = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
-        const pct = Math.round((e.loaded / e.total) * 90);
+        const totalPct = Math.round((e.loaded / e.total) * 90);
         uploadTasks.value.forEach((t) => {
-          if (t.status === "uploading") t.progress = pct;
+          if (t.status === "uploading") {
+            // 按文件大小比例分配进度，避免所有文件进度完全一致
+            const ratio = totalSize > 0 ? t.size / totalSize : 1 / files.length;
+            const filePct = Math.round(totalPct * Math.min(ratio * files.length, 1));
+            t.progress = Math.max(t.progress, Math.min(filePct, 90));
+          }
         });
       };
       xhr.onload = () => {
@@ -214,8 +221,10 @@ async function importFiles(fileList) {
           localTask.status = task.status;
           localTask.message = task.message;
           if (task.status === "processing") {
-            localTask.progress = 90;
+            localTask.progress = Math.max(localTask.progress, 90);
             pendingTaskIds.value.add(task.task_id);
+          } else if (task.status === "success" || task.status === "error" || task.status === "warning") {
+            localTask.progress = 100;
           }
         }
       });
@@ -300,17 +309,27 @@ watch(activeSessionId, (id) => {
 });
 
 watch(deleteDialogVisible, (v) => { if (!v) deleteDialogState.value.onConfirm = null; });
-watch(successDialogVisible, (v) => { if (!v) successDialogState.value.title = ""; successDialogState.value.message = ""; });
+watch(successDialogVisible, (v) => {
+  if (!v) {
+    successDialogState.value.title = "";
+    successDialogState.value.message = "";
+    successDialogState.value.items = [];
+  }
+});
 
 // 处理 WebSocket 消息
 const pendingTaskIds = ref(new Set());
 let pendingSuccessCount = 0;
+const pendingSuccessFiles = ref([]);
 
 function handleUploadWsMessage(data) {
   if (data.type === "upload_progress") {
     const task = uploadTasks.value.find((t) => t.id === data.task_id);
     if (task) {
-      task.progress = data.progress || 50;
+      // 后端 progress 是处理阶段进度(0-100)，映射到 90-100 区间
+      const backendProgress = typeof data.progress === "number" ? data.progress : 50;
+      const mappedProgress = 90 + Math.round(backendProgress * 0.1);
+      task.progress = Math.max(task.progress, mappedProgress);
       task.status = "processing";
     }
   } else if (data.type === "upload_complete") {
@@ -324,16 +343,35 @@ function handleUploadWsMessage(data) {
     if (data.status === "success" && data.upload) {
       refreshUploads();
       pendingSuccessCount++;
+      // 记录成功的文件名（优先从 uploadTasks 获取，后备从 data.upload 获取）
+      const task = uploadTasks.value.find((t) => t.id === data.task_id);
+      const fileName = task?.name || data.upload?.name || data.upload?.filename || "";
+      if (fileName) {
+        pendingSuccessFiles.value.push(fileName);
+      }
     }
 
     pendingTaskIds.value.delete(data.task_id);
 
     if (pendingTaskIds.value.size === 0 && pendingSuccessCount > 0) {
       const count = pendingSuccessCount;
+      const fileNames = [...pendingSuccessFiles.value];
       pendingSuccessCount = 0;
+      pendingSuccessFiles.value = [];
+      
+      // 构建成功消息
+      let message = "";
+      const items = fileNames.map((name) => ({ name }));
+      if (count === 1) {
+        message = fileNames.length ? `「${fileNames[0]}」已成功导入知识库` : "文件已成功导入知识库";
+      } else {
+        message = `${count} 个文件已成功导入知识库`;
+      }
+      
       successDialogState.value = {
         title: "导入成功",
-        message: count === 1 ? "文件已成功导入知识库" : `${count} 个文件已成功导入知识库`,
+        message,
+        items,
       };
       successDialogVisible.value = true;
     }
@@ -506,6 +544,7 @@ onUnmounted(() => {
       tone="success"
       :title="successDialogState.title"
       :summary="successDialogState.message"
+      :items="successDialogState.items"
       badge-text="文件导入成功"
       confirm-text="知道了"
       @confirm="successDialogVisible = false"
