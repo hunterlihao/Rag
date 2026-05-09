@@ -53,8 +53,9 @@ def cleanup_all_collection_locks():
 
 class KnowledgeBaseService(object):
 
-    def __init__(self, user_id: str | None = None):
+    def __init__(self, user_id: str | None = None, redis_service=None):
         self.user_id = user_id
+        self.redis_service = redis_service
         self.collection_name = config.build_user_collection_name(user_id)
         self.chroma = Chroma(
             **config.build_chroma_kwargs(
@@ -136,6 +137,29 @@ class KnowledgeBaseService(object):
             ids=[f"{document_id}:{index}" for index, _ in enumerate(knowledge_chunks, start=1)],
             metadatas=[metadata.copy() for _ in knowledge_chunks],
         )
+        
+        # 优化5: 写入SHA256去重缓存
+        if self.redis_service and content_sha256:
+            try:
+                self.redis_service.set_upload_sha256(
+                    str(self.user_id),
+                    content_sha256,
+                    {
+                        "duplicate": True,
+                        "doc_id": document_id,
+                        "filename": filename,
+                        "chunk_count": len(knowledge_chunks)
+                    }
+                )
+            except Exception:
+                logger.debug("SHA256去重缓存写入失败")
+        
+        # 优化6: 清理知识库元信息缓存
+        if self.redis_service:
+            try:
+                self.redis_service.invalidate_collection_meta(str(self.user_id))
+            except Exception:
+                pass
 
         return {
             "message": f"上传成功，共写入 {len(knowledge_chunks)} 个文本片段",
@@ -169,6 +193,16 @@ class KnowledgeBaseService(object):
                 chunk_ids = [str(item) for item in result.get("ids", [])]
                 if chunk_ids:
                     self.chroma.delete(ids=chunk_ids)
+                
+                # 优化6: 清理知识库元信息缓存
+                if self.redis_service:
+                    try:
+                        self.redis_service.invalidate_collection_meta(str(self.user_id))
+                        # 清理向量检索缓存
+                        self.redis_service.invalidate_vector_search(self.collection_name)
+                    except Exception:
+                        pass
+                
                 return len(chunk_ids)
         finally:
             release_collection_lock(self.collection_name)
@@ -188,10 +222,64 @@ class KnowledgeBaseService(object):
 
                 if chunk_ids:
                     self.chroma.delete(ids=chunk_ids)
+            
+            # 优化6: 清理知识库元信息缓存
+            if self.redis_service:
+                try:
+                    self.redis_service.invalidate_collection_meta(str(self.user_id))
+                except Exception:
+                    pass
 
             return {
                 "deleted_chunks": len(chunk_ids),
                 "message": f"已删除 {len(chunk_ids)} 个知识片段",
             }
+        finally:
+            release_collection_lock(self.collection_name)
+    
+    # 优化6: 获取知识库元信息
+    def get_collection_metadata(self) -> dict:
+        """获取知识库元信息,优先使用Redis缓存"""
+        # 尝试缓存
+        if self.redis_service:
+            try:
+                cached = self.redis_service.get_collection_meta(str(self.user_id))
+                if cached is not None:
+                    return cached
+            except Exception:
+                pass
+        
+        # 查询实际数据
+        lock = get_collection_lock(self.collection_name)
+        try:
+            with lock:
+                result = self.chroma.get()
+                chunk_ids = result.get("ids", [])
+                
+                # 统计文档数(去重)
+                document_ids = set()
+                for chunk_id in chunk_ids:
+                    if ":" in chunk_id:
+                        doc_id = chunk_id.rsplit(":", 1)[0]
+                        document_ids.add(doc_id)
+                
+                meta = {
+                    "document_count": len(document_ids),
+                    "chunk_count": len(chunk_ids),
+                    "last_updated": datetime.now().isoformat()
+                }
+                
+                # 写入缓存
+                if self.redis_service:
+                    try:
+                        self.redis_service.set_collection_meta(
+                            str(self.user_id),
+                            meta,
+                            ttl=300  # 5分钟
+                        )
+                    except Exception:
+                        pass
+                
+                return meta
         finally:
             release_collection_lock(self.collection_name)

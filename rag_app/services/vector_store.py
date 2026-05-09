@@ -1,9 +1,12 @@
 import math
+import logging
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from rag_app import config
+
+logger = logging.getLogger(__name__)
 
 
 def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
@@ -16,23 +19,58 @@ def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
 
 
 class VectorStoreService(object):
-    def __init__(self, embedding, user_id: str | None = None):
+    def __init__(self, embedding, user_id: str | None = None, redis_service=None):
         self.embedding = embedding
+        self.redis_service = redis_service
+        self.collection_name = config.build_user_collection_name(user_id)
         self.vector_store = Chroma(
             **config.build_chroma_kwargs(
-                collection_name=config.build_user_collection_name(user_id),
+                collection_name=self.collection_name,
                 embedding_function=self.embedding,
             )
         )
 
     def retrieve_documents(self, query: str) -> list[Document]:
+        # 优化2: 尝试从 Redis 缓存获取向量检索结果
+        if self.redis_service:
+            try:
+                cached = self.redis_service.get_vector_search(self.collection_name, query)
+                if cached is not None:
+                    logger.debug("向量检索缓存命中: %s", query[:50])
+                    # 从缓存重建Document对象
+                    return [
+                        Document(page_content=item["content"], metadata=item["metadata"])
+                        for item in cached
+                    ]
+            except Exception:
+                logger.debug("向量检索缓存读取失败,执行实际检索")
+        
+        # 执行实际检索
         scored_documents = self.similarity_search_with_scores(
             query,
             k=config.RETRIEVAL_FETCH_K,
         )
         filtered_documents = self.apply_similarity_threshold(scored_documents)
         diversified_documents = self.apply_mmr(query, filtered_documents)
-        return diversified_documents[:config.MMR_CANDIDATE_K]
+        result_documents = diversified_documents[:config.MMR_CANDIDATE_K]
+        
+        # 写入Redis缓存
+        if self.redis_service and result_documents:
+            try:
+                cache_data = [
+                    {"content": doc.page_content, "metadata": doc.metadata}
+                    for doc in result_documents
+                ]
+                self.redis_service.set_vector_search(
+                    self.collection_name,
+                    query,
+                    cache_data,
+                    ttl=600  # 10分钟
+                )
+            except Exception:
+                logger.debug("向量检索缓存写入失败")
+        
+        return result_documents
 
     def similarity_search_with_scores(self, query: str, k: int) -> list[Document]:
         scored_results = self.vector_store.similarity_search_with_relevance_scores(query, k=k)

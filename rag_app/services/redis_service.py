@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -101,15 +102,190 @@ class RedisService:
     def clear_rate_limit_bucket(self, *parts: str):
         key = self._key(*parts)
         self._run(self.client.delete, key)
-
+    
+    # ========== 优化1: RAG检索缓存 ==========
+    def get_rag_retrieval(self, cache_key: str) -> list | None:
+        """获取RAG检索缓存"""
+        key = self._key("rag", "retrieval", cache_key)
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_rag_retrieval(self, cache_key: str, documents: list, ttl: int = 300):
+        """设置RAG检索缓存,默认5分钟"""
+        key = self._key("rag", "retrieval", cache_key)
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(documents, ensure_ascii=False),
+        )
+    
+    def delete_rag_retrieval(self, cache_key: str):
+        """删除RAG检索缓存"""
+        key = self._key("rag", "retrieval", cache_key)
+        self._run(self.client.delete, key)
+    
+    # ========== 优化2: 向量检索结果缓存 ==========
+    def get_vector_search(self, collection_name: str, query_text: str) -> list | None:
+        """获取向量检索缓存"""
+        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        key = self._key("vector", "search", collection_name, query_hash)
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_vector_search(self, collection_name: str, query_text: str, documents: list, ttl: int = 600):
+        """设置向量检索缓存,默认10分钟"""
+        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        key = self._key("vector", "search", collection_name, query_hash)
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(documents, ensure_ascii=False),
+        )
+    
+    def invalidate_vector_search(self, collection_name: str):
+        """清理集合的所有向量检索缓存(上传新文档后调用)"""
+        pattern = self._key("vector", "search", collection_name, "*")
+        keys = self._run(self.client.keys, pattern)
+        if keys:
+            self._run(self.client.delete, *keys)
+    
+    # ========== 优化3: 模型实例状态缓存 ==========
+    def get_model_status(self, model_id: str) -> dict | None:
+        """获取模型加载状态"""
+        key = self._key("model", "status", model_id)
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_model_status(self, model_id: str, status: dict, ttl: int = 3600):
+        """设置模型加载状态,默认1小时"""
+        key = self._key("model", "status", model_id)
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(status, ensure_ascii=False),
+        )
+    
+    # ========== 优化4: 用户偏好设置缓存 ==========
+    def get_user_preferences(self, user_id: str) -> dict | None:
+        """获取用户偏好设置"""
+        key = self._key("user", "preferences", user_id)
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_user_preferences(self, user_id: str, preferences: dict, ttl: int = 86400):
+        """设置用户偏好设置,默认24小时"""
+        key = self._key("user", "preferences", user_id)
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(preferences, ensure_ascii=False),
+        )
+    
+    def delete_user_preferences(self, user_id: str):
+        """删除用户偏好缓存"""
+        key = self._key("user", "preferences", user_id)
+        self._run(self.client.delete, key)
+    
+    # ========== 优化5: 文档去重SHA256索引缓存 ==========
+    def get_upload_sha256(self, user_id: str, content_sha256: str) -> dict | None:
+        """获取上传文档SHA256去重缓存"""
+        key = self._key("upload", "sha256", user_id, content_sha256)
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_upload_sha256(self, user_id: str, content_sha256: str, doc_info: dict, ttl: int = 604800):
+        """设置上传文档SHA256去重缓存,默认7天"""
+        key = self._key("upload", "sha256", user_id, content_sha256)
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(doc_info, ensure_ascii=False),
+        )
+    
+    # ========== 优化6: 知识库集合元信息缓存 ==========
+    def get_collection_meta(self, user_id: str) -> dict | None:
+        """获取知识库集合元信息"""
+        key = self._key("collection", "meta", user_id)
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_collection_meta(self, user_id: str, meta: dict, ttl: int = 300):
+        """设置知识库集合元信息,默认5分钟"""
+        key = self._key("collection", "meta", user_id)
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(meta, ensure_ascii=False),
+        )
+    
+    def invalidate_collection_meta(self, user_id: str):
+        """清理知识库元信息缓存(上传/删除文档后调用)"""
+        key = self._key("collection", "meta", user_id)
+        self._run(self.client.delete, key)
+    
+    # ========== 优化7: 问答意图分类缓存 ==========
+    def get_query_intent(self, query_text: str) -> str | None:
+        """获取查询意图分类"""
+        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        key = self._key("intent", "query", query_hash)
+        return self._run(self.client.get, key)
+    
+    def set_query_intent(self, query_text: str, intent: str, ttl: int = 3600):
+        """设置查询意图分类,默认1小时"""
+        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        key = self._key("intent", "query", query_hash)
+        self._run(self.client.setex, key, ttl, intent)
+    
+    # ========== 优化9: 用户会话消息热点缓存 ==========
+    def get_session_messages(self, session_id: str) -> list | None:
+        """获取会话消息热点缓存"""
+        key = self._key("session", "messages", session_id, "recent")
+        payload = self._run(self.client.get, key)
+        if not payload:
+            return None
+        return json.loads(payload)
+    
+    def set_session_messages(self, session_id: str, messages: list, ttl: int = 1800):
+        """设置会话消息热点缓存,默认30分钟"""
+        key = self._key("session", "messages", session_id, "recent")
+        self._run(
+            self.client.setex,
+            key,
+            ttl,
+            json.dumps(messages, ensure_ascii=False),
+        )
+    
+    def invalidate_session_messages(self, session_id: str):
+        """清理会话消息缓存(新消息后调用)"""
+        key = self._key("session", "messages", session_id, "recent")
+        self._run(self.client.delete, key)
+    
     def _key(self, *parts: str) -> str:
         normalized_parts = [config.REDIS_KEY_PREFIX]
         normalized_parts.extend(str(part).strip() for part in parts if str(part).strip())
         return ":".join(normalized_parts)
-
+    
     @staticmethod
     def _run(operation, *args, **kwargs) -> Any:
         try:
             return operation(*args, **kwargs)
         except RedisError as exc:
-            raise RuntimeError(f"Redis 操作失败：{exc}") from exc
+            raise RuntimeError(f"Redis 操作失败:{exc}") from exc

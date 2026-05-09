@@ -188,6 +188,35 @@ def is_casual_chat_query(query: str) -> bool:
     return normalized_query in CASUAL_CHAT_QUERIES
 
 
+def classify_query_intent(query: str, redis_service=None) -> str:
+    """分类查询意图,使用Redis缓存加速"""
+    # 尝试缓存
+    if redis_service:
+        try:
+            cached = redis_service.get_query_intent(query)
+            if cached:
+                return cached
+        except Exception:
+            pass
+    
+    # 实际分类
+    if is_casual_chat_query(query):
+        intent = "chat"
+    elif looks_like_knowledge_query(query):
+        intent = "knowledge"
+    else:
+        intent = "auto"
+    
+    # 写入缓存
+    if redis_service:
+        try:
+            redis_service.set_query_intent(query, intent)
+        except Exception:
+            pass
+    
+    return intent
+
+
 def debug_prompt(prompt):
     if config.DEBUG_RETRIEVAL:
         logger.debug("RAG prompt prepared.")
@@ -209,15 +238,22 @@ def format_documents(docs: list[Document]) -> str:
         source = doc.metadata.get("source", "未知来源")
         source_type = doc.metadata.get("source_type", "未知")
         similarity_score = doc.metadata.get("similarity_score")
-        
+
         # 格式化相似度
         if similarity_score is not None and isinstance(similarity_score, float):
             score_str = f"{similarity_score * 100:.1f}%"
         else:
             score_str = str(similarity_score) if similarity_score else "未知"
-        
+
+        # 清洗内容中的多余空白
+        content = " ".join(str(doc.page_content or "").split())
+
         formatted_parts.append(
-            f"[片段{index}]\n来源: {source}\n类型: {source_type}\n相似度: {score_str}\n内容: {doc.page_content}"
+            f"[片段{index}]\n"
+            f"来源: {source}\n"
+            f"类型: {source_type}\n"
+            f"相似度: {score_str}\n"
+            f"内容: {content}"
         )
     return "\n\n".join(formatted_parts)
 
@@ -249,14 +285,15 @@ def format_documents_for_rerank(docs: list[Document]) -> str:
 
 
 class RagService(object):
-    def __init__(self):
+    def __init__(self, redis_service=None):
+        self._redis_service = redis_service
         self.query_rewrite_prompt = ChatPromptTemplate.from_messages([
             (
                 "system",
                 "你是向量检索查询改写器。"
                 "你的任务是把用户当前问题改写成更适合知识库检索的查询语句。"
                 "如果用户问题已经足够明确，就尽量少改。"
-                "如果用户问题包含“它、这个、第二个、上面的”等指代，请结合历史对话补全。"
+                "如果用户问题包含\"它、这个、第二个、上面的\"等指代，请结合历史对话补全。"
                 "不要回答问题，不要解释原因，只输出一条检索查询语句。",
             ),
             (
@@ -299,7 +336,7 @@ class RagService(object):
         self.answer_chain_cache = {}
         self.query_rewrite_chain_cache = {}
         self.rerank_chain_cache = {}
-        # 修复: 使用带TTL和大小限制的缓存,防止内存泄漏
+        # 修复: 使用带TTL和大小限制的缓存作为Redis的fallback
         self._retrieval_cache = TTLCache(
             max_size=RETRIEVAL_CACHE_MAX_SIZE,
             ttl_seconds=RETRIEVAL_CACHE_TTL_SECONDS
@@ -370,7 +407,7 @@ class RagService(object):
             "_retrieval_cache_key": cache_key,
         }
         answer = self.get_chain(chat_model_id).invoke(invoke_payload, runtime_config)
-        documents = self._retrieval_cache.pop(cache_key, [])
+        documents = self._get_retrieval_cache(cache_key, [])
         sources = self._build_source_data(documents) if documents else []
         return answer, sources
 
@@ -404,9 +441,39 @@ class RagService(object):
             if stream_iterator is not None and hasattr(stream_iterator, "close"):
                 stream_iterator.close()
 
-        documents = self._retrieval_cache.pop(cache_key, [])
+        documents = self._get_retrieval_cache(cache_key, [])
         if documents:
             yield {"__sources__": self._build_source_data(documents)}
+
+    def _get_retrieval_cache(self, cache_key: str, default=None):
+        """获取检索缓存,优先Redis,降级到内存"""
+        # 1. 尝试Redis缓存
+        if self._redis_service:
+            try:
+                cached = self._redis_service.get_rag_retrieval(cache_key)
+                if cached is not None:
+                    return cached
+            except Exception:
+                logger.debug("Redis检索缓存读取失败,降级到内存缓存")
+        
+        # 2. 降级到内存缓存
+        return self._retrieval_cache.get(cache_key) or default
+    
+    def _set_retrieval_cache(self, cache_key: str, documents: list):
+        """设置检索缓存,同时写入Redis和内存"""
+        # 1. 写入Redis(主缓存)
+        if self._redis_service:
+            try:
+                self._redis_service.set_rag_retrieval(
+                    cache_key,
+                    documents,
+                    ttl=RETRIEVAL_CACHE_TTL_SECONDS
+                )
+            except Exception:
+                logger.debug("Redis检索缓存写入失败,仅使用内存缓存")
+        
+        # 2. 写入内存(备用缓存)
+        self._retrieval_cache.set(cache_key, documents)
 
     @staticmethod
     def append_history(session_id: str, prompt: str, assistant_reply: str, sources: list[dict] | None = None):
@@ -429,7 +496,7 @@ class RagService(object):
         if answer_mode == config.ANSWER_MODE_CHAT or is_casual_chat_query(original_query):
             cache_key = payload.get("_retrieval_cache_key")
             if cache_key:
-                self._retrieval_cache.set(cache_key, [])
+                self._set_retrieval_cache(cache_key, [])
             return CHAT_CONTEXT_TEXT
 
         history = payload.get("history", [])
@@ -443,7 +510,7 @@ class RagService(object):
             logger.exception("Knowledge retrieval failed.")
             cache_key = payload.get("_retrieval_cache_key")
             if cache_key:
-                self._retrieval_cache.set(cache_key, [])
+                self._set_retrieval_cache(cache_key, [])
             return RETRIEVAL_ERROR_CONTEXT_TEXT
 
         raise_if_cancelled(payload)
@@ -452,7 +519,7 @@ class RagService(object):
         final_documents = reranked_documents[:config.RETRIEVAL_TOP_K]
         cache_key = payload.get("_retrieval_cache_key")
         if cache_key:
-            self._retrieval_cache.set(cache_key, final_documents)
+            self._set_retrieval_cache(cache_key, final_documents)
         self.print_retrieval_debug(original_query, retrieval_query, final_documents)
         return format_documents(final_documents)
 
@@ -501,15 +568,50 @@ class RagService(object):
                 score_str = f"{similarity_score * 100:.1f}%"
             else:
                 score_str = str(similarity_score) if similarity_score is not None else "未知"
+            # 清洗预览文本: 去除多余空白、规范化换行
             content = doc.page_content
-            preview = content[:200] + ("..." if len(content) > 200 else "")
+            preview = RagService._clean_preview_text(content)
             sources.append({
                 "filename": source,
                 "type": doc.metadata.get("source_type", "未知"),
                 "score": score_str,
+                "score_value": float(similarity_score) if isinstance(similarity_score, float) else 0.0,
                 "preview": preview,
             })
+        # 按相似度降序排列
+        sources.sort(key=lambda s: s["score_value"], reverse=True)
         return sources
+
+    @staticmethod
+    def _clean_preview_text(text: str, max_length: int = 200) -> str:
+        """清洗文本预览: 去除多余空行并截断"""
+        if not text:
+            return ""
+        # 1. 按行分割,去除每行首尾空白
+        lines = [line.strip() for line in text.splitlines()]
+        # 2. 过滤空行,但保留段落结构(最多连续1个空行)
+        cleaned_lines = []
+        for line in lines:
+            if line:
+                cleaned_lines.append(line)
+            elif cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+        # 3. 用换行符重新连接
+        cleaned = "\n".join(cleaned_lines)
+        # 4. 去除零宽字符
+        cleaned = cleaned.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
+        # 5. 截断并添加省略号(在段落边界处)
+        if len(cleaned) > max_length:
+            trunc_point = max_length
+            # 找最后一个换行或空格
+            while trunc_point > max_length * 0.6:
+                if cleaned[trunc_point] == "\n" or cleaned[trunc_point] == " ":
+                    break
+                trunc_point -= 1
+            if trunc_point <= max_length * 0.6:
+                trunc_point = max_length
+            cleaned = cleaned[:trunc_point].rstrip() + "..."
+        return cleaned
 
     def rewrite_query(
         self,

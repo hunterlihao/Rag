@@ -176,6 +176,44 @@ class WorkspaceService:
         if self.redis_service is None:
             return
         self.redis_service.clear_session_summaries(user_id)
+    
+    # 优化4: 用户偏好设置缓存
+    def get_user_preferences(self, user_id: str) -> dict | None:
+        """获取用户偏好设置,优先Redis"""
+        if self.redis_service is None:
+            return None
+        return self.redis_service.get_user_preferences(user_id)
+    
+    def save_user_preferences(self, user_id: str, preferences: dict):
+        """保存用户偏好设置到Redis"""
+        if self.redis_service is None:
+            return
+        self.redis_service.set_user_preferences(user_id, preferences)
+    
+    def delete_user_preferences(self, user_id: str):
+        """删除用户偏好缓存"""
+        if self.redis_service is None:
+            return
+        self.redis_service.delete_user_preferences(user_id)
+    
+    # 优化9: 会话消息热点缓存
+    def get_cached_session_messages(self, session_id: str) -> list | None:
+        """获取会话消息缓存"""
+        if self.redis_service is None:
+            return None
+        return self.redis_service.get_session_messages(session_id)
+    
+    def cache_session_messages(self, session_id: str, messages: list):
+        """缓存会话消息"""
+        if self.redis_service is None:
+            return
+        self.redis_service.set_session_messages(session_id, messages)
+    
+    def invalidate_session_messages(self, session_id: str):
+        """清理会话消息缓存"""
+        if self.redis_service is None:
+            return
+        self.redis_service.invalidate_session_messages(session_id)
 
     def ensure_session_summaries(self, database: Session, sessions: list[ChatSession]):
         dirty_sessions = []

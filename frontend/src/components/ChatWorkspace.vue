@@ -200,7 +200,11 @@ watch(() => messageScrollSignature.value, async () => {
                 <div v-if="message.sources?.length" class="mt-3">
                   <div class="text-xs font-medium text-zinc-500 mb-2">参考来源</div>
                   <div class="space-y-2">
-                    <div v-for="(source, idx) in [message.sources.sort((a, b) => b.score - a.score)[0]]" :key="idx" class="bg-white border border-zinc-200 rounded-lg p-3 hover:border-zinc-300 transition-colors">
+                    <div
+                      v-for="(source, idx) in message.sources"
+                      :key="idx"
+                      class="bg-white border border-zinc-200 rounded-lg p-3 hover:border-zinc-300 transition-colors"
+                    >
                       <div class="flex items-center justify-between mb-1.5 gap-2">
                         <span class="text-sm font-medium text-zinc-800 break-all">{{ source.filename }}</span>
                         <span class="text-xs text-zinc-400 shrink-0">{{ source.score }}</span>

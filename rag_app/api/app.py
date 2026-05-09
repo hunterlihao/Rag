@@ -525,7 +525,8 @@ async def lifespan(app: FastAPI):
         workspace_service.cleanup_stale_upload_registries(startup_db)
     finally:
         startup_db.close()
-    app.state.rag_service = RagService()
+    # 优化1-9: 初始化RagService时传入redis_service,启用Redis缓存
+    app.state.rag_service = RagService(redis_service=redis_service)
     logger.info("Application startup completed.", extra={"event": "app.startup.completed"})
     try:
         yield
