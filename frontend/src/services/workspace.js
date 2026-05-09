@@ -96,6 +96,7 @@ export async function sendPromptStream(
     onSession,
     onError,
     onStopped,
+    onSources,
   } = {},
 ) {
   const session = getSession();
@@ -144,6 +145,13 @@ export async function sendPromptStream(
       const content = String(event.content || "");
       if (content && typeof onDelta === "function") {
         onDelta(content);
+      }
+      return;
+    }
+
+    if (event.type === "sources") {
+      if (event.sources && typeof onSources === "function") {
+        onSources(event.sources);
       }
       return;
     }
@@ -282,4 +290,67 @@ export async function deleteUploads(uploadIds) {
     method: "POST",
     body: JSON.stringify({ upload_ids: uploadIds }),
   });
+}
+
+// WebSocket 连接管理
+let uploadWebSocket = null;
+const uploadWsListeners = [];
+
+export function connectUploadWebSocket(onMessage) {
+  const session = getSession();
+  if (!session?.token) return null;
+
+  // 如果已有连接，先关闭
+  if (uploadWebSocket) {
+    uploadWebSocket.close();
+  }
+
+  const apiBase = import.meta.env.VITE_PROXY_TARGET || "http://127.0.0.1:8520";
+  const wsUrl = `${apiBase.replace(/^http/, "ws")}/ws/uploads?token=${encodeURIComponent(session.token)}`;
+
+  uploadWebSocket = new WebSocket(wsUrl);
+
+  uploadWebSocket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (typeof onMessage === "function") {
+        onMessage(data);
+      }
+      // 通知所有注册的监听器
+      uploadWsListeners.forEach((listener) => listener(data));
+    } catch (error) {
+      console.error("WebSocket message parse error:", error);
+    }
+  };
+
+  uploadWebSocket.onclose = () => {
+    console.log("Upload WebSocket closed");
+    uploadWebSocket = null;
+  };
+
+  uploadWebSocket.onerror = (error) => {
+    console.error("Upload WebSocket error:", error);
+  };
+
+  return uploadWebSocket;
+}
+
+export function addUploadWsListener(listener) {
+  if (!uploadWsListeners.includes(listener)) {
+    uploadWsListeners.push(listener);
+  }
+}
+
+export function removeUploadWsListener(listener) {
+  const index = uploadWsListeners.indexOf(listener);
+  if (index > -1) {
+    uploadWsListeners.splice(index, 1);
+  }
+}
+
+export function disconnectUploadWebSocket() {
+  if (uploadWebSocket) {
+    uploadWebSocket.close();
+    uploadWebSocket = null;
+  }
 }

@@ -163,6 +163,8 @@ async function submitPrompt(rawPrompt) {
   prompt.value = "";
   isAnswering.value = true;
 
+  let collectedSources = [];
+
   try {
     const updated = await sendPromptStream(activeSession.value.id, content, {
       answerMode: preferences.value.answerMode,
@@ -174,8 +176,18 @@ async function submitPrompt(rawPrompt) {
         const msg = opt.messages.find((m) => m.id === aid);
         if (msg) { msg.content += delta; opt.messageCount = opt.messages.length; }
       },
+      onSources(sources) {
+        collectedSources = sources;
+        const msg = opt.messages.find((m) => m.id === aid);
+        if (msg) { msg.sources = sources; }
+      },
     });
     mergeSession(updated);
+    if (collectedSources.length) {
+      const mergedSession = sessions.value.find((s) => s.id === activeSessionId.value);
+      const lastAssistant = mergedSession?.messages?.slice().reverse().find((m) => m.role === "assistant");
+      if (lastAssistant) { lastAssistant.sources = collectedSources; }
+    }
   } catch (err) {
     if (err.name === "AbortError") {
       if (isStoppingAnswer.value) {

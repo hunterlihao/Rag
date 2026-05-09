@@ -199,10 +199,9 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
             class="w-full h-7 pl-7 pr-2 bg-zinc-50 border border-zinc-100 rounded-lg text-xs focus:outline-none focus:border-zinc-200 transition-colors"
           />
         </div>
-        <label v-if="pageMode" class="flex items-center gap-1 text-xs text-zinc-500 cursor-pointer select-none shrink-0">
-          <input type="checkbox" :checked="allUploadsSelected" @change="toggleSelectAll" class="w-3.5 h-3.5 rounded border-zinc-300 text-zinc-900" />
-          全选
-        </label>
+        <button v-if="pageMode" @click="emit('toggle-select-all', !allUploadsSelected)" class="text-xs text-zinc-500 hover:text-zinc-700 shrink-0">
+          {{ allUploadsSelected ? '取消全选' : '全选' }}
+        </button>
         <button
           v-if="pageMode && selectedUploadCount > 0"
           @click="handleBatchDelete"
@@ -223,20 +222,12 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
 
         <div
           v-for="upload in uploads" :key="upload.id"
-          :class="['group relative bg-white border rounded-xl transition-all', pageMode ? 'p-3' : 'flex items-center gap-2 px-3 py-2', selectedUploadIds.includes(upload.id) ? 'border-zinc-900 bg-zinc-50' : 'border-zinc-100 hover:border-zinc-300']"
+          :class="['group relative border rounded-xl transition-all', pageMode ? 'p-3 cursor-pointer' : 'flex items-center gap-2 px-3 py-2', selectedUploadIds.includes(upload.id) ? 'border-zinc-400 bg-zinc-100' : 'bg-white border-zinc-100 hover:border-zinc-300']"
+          @click="pageMode && toggleUpload(upload, !selectedUploadIds.includes(upload.id))"
         >
-          <!-- Checkbox (pageMode: top-left) -->
-          <input
-            v-if="pageMode"
-            type="checkbox"
-            :checked="selectedUploadIds.includes(upload.id)"
-            @change="toggleUpload(upload, $event.target.checked)"
-            class="absolute top-2.5 left-2.5 w-3.5 h-3.5 rounded border-zinc-300 text-zinc-900 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
-            :class="{ 'opacity-100': selectedUploadIds.includes(upload.id) }"
-          />
 
           <!-- File icon -->
-          <div :class="['rounded-lg flex items-center justify-center shrink-0', pageMode ? 'w-10 h-10 mb-2 ml-1' : 'w-8 h-8', upload.status === 'success' ? 'bg-emerald-50' : upload.status === 'error' ? 'bg-red-50' : 'bg-zinc-100']">
+          <div :class="['rounded-lg flex items-center justify-center shrink-0', pageMode ? 'w-10 h-10 mb-2' : 'w-8 h-8', upload.status === 'success' ? 'bg-emerald-50' : upload.status === 'error' ? 'bg-red-50' : 'bg-zinc-100']">
             <FileText :class="[upload.status === 'success' ? 'text-emerald-600' : upload.status === 'error' ? 'text-red-500' : 'text-zinc-500', pageMode ? 'w-5 h-5' : 'w-4 h-4']" />
           </div>
 

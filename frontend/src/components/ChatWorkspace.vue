@@ -37,7 +37,7 @@ const showHero = computed(() => !props.session.messages || props.session.message
 const renderedMessages = computed(() => showHero.value ? [] : props.session.messages);
 
 const messageScrollSignature = computed(() =>
-  (props.session.messages || []).map((m) => `${m.id || ""}:${String(m.content || "").length}`).join("|")
+  (props.session.messages || []).map((m) => `${m.id || ""}:${String(m.content || "").length}:${m.sources?.length || 0}`).join("|")
 );
 
 const hasStreamingAssistant = computed(() => {
@@ -195,6 +195,18 @@ watch(() => messageScrollSignature.value, async () => {
                 <div class="bg-white border border-zinc-200 rounded-lg">
                   <div class="px-4 py-3">
                     <div class="markdown-content text-sm text-zinc-900 leading-relaxed" v-html="renderMessageHtml(message)"></div>
+                  </div>
+                </div>
+                <div v-if="message.sources?.length" class="mt-3">
+                  <div class="text-xs font-medium text-zinc-500 mb-2">参考来源</div>
+                  <div class="space-y-2">
+                    <div v-for="(source, idx) in [message.sources.sort((a, b) => b.score - a.score)[0]]" :key="idx" class="bg-white border border-zinc-200 rounded-lg p-3 hover:border-zinc-300 transition-colors">
+                      <div class="flex items-center justify-between mb-1.5 gap-2">
+                        <span class="text-sm font-medium text-zinc-800 break-all">{{ source.filename }}</span>
+                        <span class="text-xs text-zinc-400 shrink-0">{{ source.score }}</span>
+                      </div>
+                      <p class="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">{{ source.preview }}</p>
+                    </div>
                   </div>
                 </div>
                 <div class="flex items-center gap-1 mt-1">

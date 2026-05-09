@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { ArrowLeft, Files, Upload, Loader2, AlertCircle } from "lucide-vue-next";
 
@@ -14,6 +14,7 @@ import { getPreferences, savePreferences } from "@/services/user";
 import {
   createSession, deleteSession, deleteUpload, deleteUploads,
   fetchBackendMeta, fetchSessions, fetchUploads, formatRelativeTime, uploadFileWithProgress,
+  connectUploadWebSocket, addUploadWsListener, removeUploadWsListener, disconnectUploadWebSocket,
 } from "@/services/workspace";
 
 const route = useRoute();
@@ -34,6 +35,8 @@ const uploadTasks = ref([]);
 const selectedUploadIds = ref([]);
 const deleteDialogVisible = ref(false);
 const deleteDialogState = ref({ tone: "danger", title: "", summary: "", hint: "", items: [], extra: "", confirmText: "确认删除", onConfirm: null });
+const successDialogVisible = ref(false);
+const successDialogState = ref({ title: "", message: "" });
 
 const sidebarBusy = computed(() => importBusy.value || batchDeleting.value || !!deletingUploadId.value || !!deletingSessionId.value);
 const navItems = computed(() => buildSidebarNavItems(user.value));
@@ -175,63 +178,60 @@ async function importFiles(fileList) {
   }));
   uploadTasks.value = [...uploadTasks.value, ...tasks];
 
-  const concurrency = Math.min(appConfig.uploadConcurrency || 2, files.length);
-  const queue = [...files];
-  const results = [];
+  const formData = new FormData();
+  files.forEach((f) => formData.append("files", f));
 
-  async function worker() {
-    while (queue.length) {
-      const file = queue.shift();
-      if (!file) break;
-      const task = tasks.find((t) => t.name === file.name && t.status === "uploading");
-      if (!task) continue;
-      try {
-        await uploadFileWithProgress(file, {
-          onProgress(ratio) {
-            task.progress = Math.round(ratio * 100);
-          },
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((e.loaded / e.total) * 90);
+        uploadTasks.value.forEach((t) => {
+          if (t.status === "uploading") t.progress = pct;
         });
-        task.status = "success";
-        task.progress = 100;
-        results.push({ name: file.name, status: "success" });
-      } catch (err) {
-        task.status = "error";
-        results.push({ name: file.name, status: "error", message: err.message });
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  await refreshUploads();
-
-  const duplicates = results.filter((r) => r.status === "error" && r.message?.includes("已经处理过"));
-  const errors = results.filter((r) => r.status === "error" && !r.message?.includes("已经处理过"));
-  if (duplicates.length) {
-    openDeleteDialog({
-      title: "重复文件提示",
-      tone: "primary",
-      summary: `${duplicates.length} 个文件已经处理过了，已自动跳过。`,
-      hint: duplicates.map((d) => d.name).join("、"),
-      confirmText: "知道了",
-      onConfirm: () => { deleteDialogVisible.value = false; },
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          try { reject(new Error(JSON.parse(xhr.responseText).detail || "上传失败")); }
+          catch { reject(new Error("上传失败")); }
+        }
+      };
+      xhr.onerror = () => reject(new Error("网络错误"));
+      const session = JSON.parse(sessionStorage.getItem("rag.frontend.session") || "null");
+      xhr.open("POST", `${appConfig.apiBaseUrl}/uploads`);
+      if (session?.token) xhr.setRequestHeader("Authorization", `Bearer ${session.token}`);
+      xhr.send(formData);
     });
-  } else if (errors.length) {
-    openDeleteDialog({
-      title: "导入失败",
-      summary: `${errors.length} 个文件导入失败`,
-      hint: errors.map((e) => `${e.name}: ${e.message}`).join("；"),
-      confirmText: "知道了",
-      onConfirm: () => { deleteDialogVisible.value = false; },
-    });
-  }
 
-  setTimeout(() => {
-    uploadTasks.value = uploadTasks.value.filter((t) => t.status !== "error");
-    if (uploadTasks.value.every((t) => t.status === "success")) {
-      uploadTasks.value = [];
+    if (result.tasks) {
+      result.tasks.forEach((task) => {
+        const localTask = uploadTasks.value.find((t) => t.name === task.filename && t.status === "uploading");
+        if (localTask) {
+          localTask.id = task.task_id;
+          localTask.status = task.status;
+          localTask.message = task.message;
+          if (task.status === "processing") {
+            localTask.progress = 90;
+            pendingTaskIds.value.add(task.task_id);
+          }
+        }
+      });
     }
-  }, 3000);
-  importBusy.value = false;
+
+    if (uploadTasks.value.every((t) => t.status !== "uploading" && t.status !== "processing")) {
+      await refreshUploads();
+    }
+  } catch (err) {
+    console.error("Upload failed:", err);
+    uploadTasks.value.forEach((t) => {
+      if (t.status === "uploading") { t.status = "error"; t.message = err.message; }
+    });
+  } finally {
+    importBusy.value = false;
+  }
 }
 
 function deleteKnowledgeFile(file) {
@@ -300,6 +300,49 @@ watch(activeSessionId, (id) => {
 });
 
 watch(deleteDialogVisible, (v) => { if (!v) deleteDialogState.value.onConfirm = null; });
+watch(successDialogVisible, (v) => { if (!v) successDialogState.value.title = ""; successDialogState.value.message = ""; });
+
+// 处理 WebSocket 消息
+const pendingTaskIds = ref(new Set());
+let pendingSuccessCount = 0;
+
+function handleUploadWsMessage(data) {
+  if (data.type === "upload_progress") {
+    const task = uploadTasks.value.find((t) => t.id === data.task_id);
+    if (task) {
+      task.progress = data.progress || 50;
+      task.status = "processing";
+    }
+  } else if (data.type === "upload_complete") {
+    const task = uploadTasks.value.find((t) => t.id === data.task_id);
+    if (task) {
+      task.status = data.status;
+      task.message = data.message;
+      task.progress = data.status === "success" ? 100 : task.progress;
+    }
+
+    if (data.status === "success" && data.upload) {
+      refreshUploads();
+      pendingSuccessCount++;
+    }
+
+    pendingTaskIds.value.delete(data.task_id);
+
+    if (pendingTaskIds.value.size === 0 && pendingSuccessCount > 0) {
+      const count = pendingSuccessCount;
+      pendingSuccessCount = 0;
+      successDialogState.value = {
+        title: "导入成功",
+        message: count === 1 ? "文件已成功导入知识库" : `${count} 个文件已成功导入知识库`,
+      };
+      successDialogVisible.value = true;
+    }
+
+    setTimeout(() => {
+      uploadTasks.value = uploadTasks.value.filter((t) => t.status !== "success" && t.status !== "error" && t.status !== "warning");
+    }, 5000);
+  }
+}
 
 onBeforeRouteLeave((to, from, next) => {
   if (pageBusy.value) {
@@ -321,11 +364,21 @@ onMounted(async () => {
     const preferredId = typeof route.query.session === "string" ? route.query.session : "";
     await refreshSessions(preferredId);
     await refreshUploads();
+
+    // 连接 WebSocket 接收上传进度
+    connectUploadWebSocket();
+    addUploadWsListener(handleUploadWsMessage);
   } catch {
     if (!getCurrentUser()) router.push("/login");
   } finally {
     pageLoading.value = false;
   }
+});
+
+// 组件卸载时断开 WebSocket
+onUnmounted(() => {
+  removeUploadWsListener(handleUploadWsMessage);
+  disconnectUploadWebSocket();
 });
 </script>
 
@@ -445,6 +498,17 @@ onMounted(async () => {
       :extra="deleteDialogState.extra"
       :confirm-text="deleteDialogState.confirmText"
       @confirm="deleteDialogState.onConfirm?.()"
+    />
+
+    <!-- 上传成功提示对话框 -->
+    <DeleteConfirmDialog
+      v-model="successDialogVisible"
+      tone="success"
+      :title="successDialogState.title"
+      :summary="successDialogState.message"
+      badge-text="文件导入成功"
+      confirm-text="知道了"
+      @confirm="successDialogVisible = false"
     />
   </div>
 </template>

@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import logging
 import re
@@ -8,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from threading import Event, Lock
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -24,6 +25,7 @@ from rag_app.services.redis_service import RedisService
 from rag_app.services.user_service import UserService
 from rag_app.services.workspace_service import WorkspaceService
 from rag_app.storage.database import SessionLocal, get_db, init_database
+from rag_app.storage.models import User
 from rag_app.utils.logging_config import get_request_id, reset_log_context, set_log_context
 
 redis_service = RedisService()
@@ -326,6 +328,57 @@ class AnswerRunRegistry:
 answer_run_registry = AnswerRunRegistry()
 
 
+class WebSocketManager:
+    """WebSocket 连接管理器，用于推送上传进度"""
+    def __init__(self):
+        self._connections: dict[str, WebSocket] = {}
+        self._lock = Lock()
+
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        with self._lock:
+            # 如果已有连接，先关闭
+            if user_id in self._connections:
+                try:
+                    await self._connections[user_id].close()
+                except Exception:
+                    pass
+            self._connections[user_id] = websocket
+
+    def disconnect(self, user_id: str):
+        with self._lock:
+            self._connections.pop(user_id, None)
+
+    async def send_upload_progress(self, user_id: str, progress_data: dict):
+        """发送上传进度到指定用户"""
+        with self._lock:
+            websocket = self._connections.get(user_id)
+        if websocket:
+            try:
+                await websocket.send_json({
+                    "type": "upload_progress",
+                    **progress_data,
+                })
+            except Exception:
+                self.disconnect(user_id)
+
+    async def send_upload_complete(self, user_id: str, complete_data: dict):
+        """发送上传完成通知到指定用户"""
+        with self._lock:
+            websocket = self._connections.get(user_id)
+        if websocket:
+            try:
+                await websocket.send_json({
+                    "type": "upload_complete",
+                    **complete_data,
+                })
+            except Exception:
+                self.disconnect(user_id)
+
+
+websocket_manager = WebSocketManager()
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     database: Session = Depends(get_db),
@@ -346,8 +399,16 @@ def get_current_user(
     if user is None:
         build_error(status.HTTP_401_UNAUTHORIZED, "当前账号不存在，请重新登录。")
     if not auth_service.is_token_current(payload, user):
-        build_error(status.HTTP_401_UNAUTHORIZED, "登录状态已过期，请重新登录。")
+        build_error(status.HTTP_401_UNAUTHORIZED, "登录状态已过期,请重新登录。")
     return user
+
+
+def delete_upload_entry(database: Session, user, upload):
+    """删除上传条目 - 同时删除向量库中的文档和数据库中的记录"""
+    kb_service = KnowledgeBaseService(user.id)
+    delete_result = kb_service.delete_document(document_id=upload.vector_doc_id)
+    workspace_service.delete_upload_with_registry(database, upload)
+    return delete_result
 
 
 def get_current_admin(user=Depends(get_current_user)):
@@ -387,11 +448,13 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    print("[DEBUG] create_app() 开始执行")
     app = FastAPI(
         title="RAG API",
         version="0.1.0",
         lifespan=lifespan,
     )
+    print("[DEBUG] FastAPI 实例创建成功")
 
     app.add_middleware(
         CORSMiddleware,
@@ -477,12 +540,6 @@ def create_app() -> FastAPI:
             headers={"X-Request-ID": get_request_id()},
         )
 
-    def delete_upload_entry(database: Session, user, upload):
-        kb_service = KnowledgeBaseService(user.id)
-        delete_result = kb_service.delete_document(document_id=upload.vector_doc_id)
-        workspace_service.delete_upload_with_registry(database, upload)
-        return delete_result
-
     @app.get("/api/meta")
     def get_meta():
         return {
@@ -494,6 +551,23 @@ def create_app() -> FastAPI:
             "supported_upload_extensions": config.SUPPORTED_UPLOAD_EXTENSIONS,
             "startup_error": None,
         }
+
+    @app.websocket("/ws/uploads")
+    async def websocket_upload_progress(websocket: WebSocket, token: str):
+        """WebSocket 端点，用于推送上传进度"""
+        try:
+            payload = auth_service.decode_access_token(token)
+            user_id = str(payload.get("sub", "")).strip()
+        except Exception:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败")
+            return
+
+        await websocket_manager.connect(websocket, user_id)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            websocket_manager.disconnect(user_id)
 
     @app.post("/api/auth/register")
     def register(
@@ -823,7 +897,7 @@ def create_app() -> FastAPI:
             build_error(status.HTTP_404_NOT_FOUND, str(exc))
 
         try:
-            assistant_reply = app.state.rag_service.invoke(
+            assistant_reply, sources = app.state.rag_service.invoke(
                 {
                     "input": prompt,
                     "user_id": user.id,
@@ -833,7 +907,8 @@ def create_app() -> FastAPI:
                 {"configurable": {"session_id": session_id}},
             )
             workspace_service.touch_session(database, session, prompt, assistant_reply)
-            return {"session": workspace_service.get_session_detail(database, user, session_id)}
+            app.state.rag_service.append_history(session_id, prompt, assistant_reply, sources=sources)
+            return {"session": workspace_service.get_session_detail(database, user, session_id), "sources": sources}
         except Exception:
             logger.exception("Failed to generate RAG answer.")
             build_error(status.HTTP_500_INTERNAL_SERVER_ERROR, "生成回答失败，请稍后重试。")
@@ -872,6 +947,7 @@ def create_app() -> FastAPI:
             stream_database = SessionLocal()
             assistant_parts: list[str] = []
             persisted = False
+            sources_data: list[dict] = []
 
             def persist_answer():
                 nonlocal persisted
@@ -880,7 +956,7 @@ def create_app() -> FastAPI:
                 assistant_reply = "".join(assistant_parts)
                 if cancel_event.is_set() and not assistant_reply.strip():
                     assistant_reply = "已停止回答。"
-                app.state.rag_service.append_history(session_id, prompt, assistant_reply)
+                app.state.rag_service.append_history(session_id, prompt, assistant_reply, sources=sources_data)
                 workspace_service.touch_session(stream_database, stream_session, prompt, assistant_reply)
                 persisted = True
 
@@ -898,6 +974,10 @@ def create_app() -> FastAPI:
                 ):
                     if cancel_event.is_set():
                         break
+                    if isinstance(chunk, dict) and "__sources__" in chunk:
+                        sources_data = chunk["__sources__"]
+                        yield encode_stream_event("sources", sources=sources_data)
+                        continue
                     content = str(chunk or "")
                     if not content:
                         continue
@@ -1000,6 +1080,7 @@ def create_app() -> FastAPI:
     @app.post("/api/uploads")
     async def upload_files(
         files: list[UploadFile] = File(...),
+        background_tasks: BackgroundTasks = None,
         user=Depends(get_current_user),
         database: Session = Depends(get_db),
     ):
@@ -1035,58 +1116,37 @@ def create_app() -> FastAPI:
                 f"单次上传总大小不能超过 {config.MAX_UPLOAD_BATCH_SIZE_MB} MB。",
             )
 
-        upload_payloads = []
-        results = []
+        # 异步处理：先返回接收状态，然后在后台处理
+        upload_tasks = []
+        file_data_list = []
+
         try:
             for item in prepared_uploads:
                 if item["size_bytes"] <= 0:
-                    results.append(
-                        build_upload_result_payload(
-                            order=item["order"],
-                            filename=item["filename"],
-                            content_type=item["content_type"],
-                            size_bytes=item["size_bytes"],
-                            status_value="error",
-                            message="空文件无法导入知识库。",
-                            uploader_name=user.name,
-                        )
-                    )
+                    upload_tasks.append({
+                        "task_id": str(uuid.uuid4()),
+                        "filename": item["filename"],
+                        "size": item["size_bytes"],
+                        "status": "error",
+                        "message": "空文件无法导入知识库。",
+                    })
                     continue
 
                 if item["size_bytes"] > config.MAX_UPLOAD_FILE_SIZE_BYTES:
-                    results.append(
-                        build_upload_result_payload(
-                            order=item["order"],
-                            filename=item["filename"],
-                            content_type=item["content_type"],
-                            size_bytes=item["size_bytes"],
-                            status_value="error",
-                            message=(
-                                f"单个文件不能超过 {config.MAX_UPLOAD_FILE_SIZE_MB} MB，"
-                                f"当前文件为 {item['filename']}。"
-                            ),
-                            uploader_name=user.name,
-                        )
-                    )
+                    upload_tasks.append({
+                        "task_id": str(uuid.uuid4()),
+                        "filename": item["filename"],
+                        "size": item["size_bytes"],
+                        "status": "error",
+                        "message": f"单个文件不能超过 {config.MAX_UPLOAD_FILE_SIZE_MB} MB。",
+                    })
                     continue
 
-                try:
-                    content_sha256 = calculate_upload_sha256(item["upload"])
-                except Exception:
-                    logger.exception("Failed to calculate upload fingerprint.")
-                    results.append(
-                        build_upload_result_payload(
-                            order=item["order"],
-                            filename=item["filename"],
-                            content_type=item["content_type"],
-                            size_bytes=item["size_bytes"],
-                            status_value="error",
-                            message="计算文件指纹失败，请稍后重试。",
-                            uploader_name=user.name,
-                        )
-                    )
-                    continue
+                # 读取文件内容到内存
+                file_content = item["upload"].file.read()
+                content_sha256 = hashlib.sha256(file_content).hexdigest()
 
+                # 检查是否重复
                 registry = workspace_service.reserve_upload_registry(
                     database=database,
                     uploader=user,
@@ -1095,148 +1155,163 @@ def create_app() -> FastAPI:
                     size_bytes=item["size_bytes"],
                     content_sha256=content_sha256,
                 )
+
                 if registry is None:
-                    results.append(
-                        build_upload_result_payload(
-                            order=item["order"],
-                            filename=item["filename"],
-                            content_type=item["content_type"],
-                            size_bytes=item["size_bytes"],
-                            status_value="warning",
-                            message=DUPLICATE_MESSAGE,
-                            uploader_name=user.name,
-                            duplicate=True,
-                        )
-                    )
+                    upload_tasks.append({
+                        "task_id": str(uuid.uuid4()),
+                        "filename": item["filename"],
+                        "size": item["size_bytes"],
+                        "status": "warning",
+                        "message": DUPLICATE_MESSAGE,
+                    })
                     continue
 
-                upload_payloads.append({
-                    **item,
-                    "registry_id": registry.id,
-                    "content_sha256": content_sha256,
+                task_id = str(uuid.uuid4())
+                upload_tasks.append({
+                    "task_id": task_id,
+                    "filename": item["filename"],
+                    "size": item["size_bytes"],
+                    "status": "processing",
+                    "message": "正在处理...",
                 })
 
-            def process_upload(prepared_item: dict[str, object]) -> dict:
-                try:
-                    upload_result = KnowledgeBaseService(user.id).upload_by_file(
-                        prepared_item["upload"].file,
-                        prepared_item["filename"],
-                        content_sha256=prepared_item["content_sha256"],
-                    )
-                    message = str(upload_result.get("message", "")).strip()
-                    if upload_result.get("duplicate"):
-                        status_value = "warning"
-                    elif upload_result.get("document_id"):
-                        status_value = "success"
-                    else:
-                        status_value = "warning"
-                except ValueError as exc:
-                    upload_result = {
-                        "message": str(exc),
-                        "duplicate": False,
-                        "content_sha256": prepared_item["content_sha256"],
-                        "document_id": None,
-                    }
-                    message = str(exc)
-                    status_value = "error"
-                except Exception:
-                    logger.exception("Failed to process upload: %s", prepared_item["filename"])
-                    upload_result = {
-                        "message": "文件解析或写入知识库失败，请稍后重试。",
-                        "duplicate": False,
-                        "content_sha256": prepared_item["content_sha256"],
-                        "document_id": None,
-                    }
-                    message = "文件解析或写入知识库失败，请稍后重试。"
-                    status_value = "error"
+                file_data_list.append({
+                    "task_id": task_id,
+                    "user_id": user.id,
+                    "filename": item["filename"],
+                    "content_type": item["content_type"],
+                    "size_bytes": item["size_bytes"],
+                    "content_sha256": content_sha256,
+                    "registry_id": registry.id,
+                    "file_content": file_content,
+                    "uploader_name": user.name,
+                })
 
-                return {
-                    "order": prepared_item["order"],
-                    "registry_id": prepared_item["registry_id"],
-                    "content_sha256": prepared_item["content_sha256"],
-                    "filename": prepared_item["filename"],
-                    "content_type": prepared_item["content_type"],
-                    "size_bytes": prepared_item["size_bytes"],
-                    "status": status_value,
-                    "message": message,
-                    "upload_result": upload_result,
-                }
-
-            if len(upload_payloads) <= 1:
-                processed_payloads = [process_upload(payload) for payload in upload_payloads]
-            else:
-                max_workers = max(1, min(config.UPLOAD_MAX_WORKERS, len(upload_payloads)))
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    processed_payloads = list(executor.map(process_upload, upload_payloads))
-
-            for processed in processed_payloads:
-                status_value = processed["status"]
-                message = processed["message"]
-                upload_result = processed["upload_result"]
-                if status_value == "success":
-                    try:
-                        upload_record = workspace_service.complete_upload(
-                            database=database,
-                            registry_id=processed["registry_id"],
-                            vector_doc_id=upload_result.get("document_id"),
-                            filename=processed["filename"],
-                            content_type=processed["content_type"],
-                            size_bytes=processed["size_bytes"],
-                            content_sha256=upload_result.get("content_sha256"),
-                            status=status_value,
-                            message=message,
-                            uploader=user,
-                        )
-                        serialized_upload = workspace_service.serialize_upload(upload_record)
-                        serialized_upload["order"] = processed["order"]
-                        results.append(serialized_upload)
-                        continue
-                    except Exception:
-                        logger.exception("Failed to persist upload record.")
-                        try:
-                            KnowledgeBaseService(user.id).delete_document(
-                                document_id=upload_result.get("document_id")
-                            )
-                        except Exception:
-                            logger.exception("Failed to roll back vector document.")
-
-                        workspace_service.release_upload_registry(
-                            database=database,
-                            registry_id=processed["registry_id"],
-                        )
-                        status_value = "error"
-                        message = "写入上传记录失败，请稍后重试。"
-                else:
-                    workspace_service.release_upload_registry(
-                        database=database,
-                        registry_id=processed["registry_id"],
-                    )
-
-                results.append(
-                    build_upload_result_payload(
-                        order=processed["order"],
-                        filename=processed["filename"],
-                        content_type=processed["content_type"],
-                        size_bytes=processed["size_bytes"],
-                        status_value=status_value,
-                        message=message,
-                        uploader_name=user.name,
-                        duplicate=bool(upload_result.get("duplicate")) or message == DUPLICATE_MESSAGE,
-                    )
+            # 添加后台任务处理文件
+            if file_data_list:
+                background_tasks.add_task(
+                    process_uploads_background,
+                    file_data_list,
+                    user.id,
                 )
 
-            results.sort(key=lambda item: item.get("order", 0))
-            for result in results:
-                result.pop("order", None)
-
             return {
-                "results": results,
-                "uploads": workspace_service.list_uploads(database, user),
+                "message": "文件已接收，正在后台处理。",
+                "tasks": upload_tasks,
             }
         finally:
             for upload in files:
                 await upload.close()
 
+    _register_upload_routes(app)
+    return app
+
+
+def process_uploads_background(file_data_list: list[dict], user_id: str):
+    """后台处理上传文件"""
+    import asyncio
+
+    db_session = SessionLocal()
+    try:
+        for file_data in file_data_list:
+            task_id = file_data["task_id"]
+            filename = file_data["filename"]
+
+            try:
+                # 发送处理中状态
+                asyncio.run(websocket_manager.send_upload_progress(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": "processing",
+                    "progress": 50,
+                }))
+
+                # 处理文件
+                file_obj = io.BytesIO(file_data["file_content"])
+                upload_result = KnowledgeBaseService(user_id).upload_by_file(
+                    file_obj,
+                    filename,
+                    content_sha256=file_data["content_sha256"],
+                )
+
+                message = str(upload_result.get("message", "")).strip()
+                if upload_result.get("duplicate"):
+                    status_value = "warning"
+                elif upload_result.get("document_id"):
+                    status_value = "success"
+                else:
+                    status_value = "warning"
+
+                if status_value == "success":
+                    try:
+                        upload_record = workspace_service.complete_upload(
+                            database=db_session,
+                            registry_id=file_data["registry_id"],
+                            vector_doc_id=upload_result.get("document_id"),
+                            filename=filename,
+                            content_type=file_data["content_type"],
+                            size_bytes=file_data["size_bytes"],
+                            content_sha256=upload_result.get("content_sha256"),
+                            status=status_value,
+                            message=message,
+                            uploader=db_session.get(User, user_id),
+                        )
+                        serialized = workspace_service.serialize_upload(upload_record)
+                        db_session.commit()
+
+                        # 发送完成状态
+                        asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                            "task_id": task_id,
+                            "filename": filename,
+                            "status": "success",
+                            "upload": serialized,
+                        }))
+                        continue
+                    except Exception:
+                        logger.exception("Failed to persist upload record.")
+                        try:
+                            KnowledgeBaseService(user_id).delete_document(
+                                document_id=upload_result.get("document_id")
+                            )
+                        except Exception:
+                            logger.exception("Failed to roll back vector document.")
+                        workspace_service.release_upload_registry(
+                            database=db_session,
+                            registry_id=file_data["registry_id"],
+                        )
+                        status_value = "error"
+                        message = "写入上传记录失败，请稍后重试。"
+                else:
+                    workspace_service.release_upload_registry(
+                        database=db_session,
+                        registry_id=file_data["registry_id"],
+                    )
+
+                # 发送错误或警告状态
+                asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": status_value,
+                    "message": message,
+                }))
+
+            except Exception:
+                logger.exception("Failed to process upload: %s", filename)
+                workspace_service.release_upload_registry(
+                    database=db_session,
+                    registry_id=file_data["registry_id"],
+                )
+                asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                    "task_id": task_id,
+                    "filename": filename,
+                    "status": "error",
+                    "message": "文件解析或写入知识库失败，请稍后重试。",
+                }))
+    finally:
+        db_session.close()
+
+
+def _register_upload_routes(app: FastAPI):
     @app.delete("/api/uploads/{upload_id}")
     def delete_upload(
         upload_id: str,
@@ -1309,8 +1384,6 @@ def create_app() -> FastAPI:
             "failed": failed_items,
             "uploads": workspace_service.list_uploads(database, user),
         }
-
-    return app
 
 
 app = create_app()

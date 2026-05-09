@@ -30,11 +30,16 @@ def load_session_messages(session_id: str) -> list[dict]:
         role = "user" if message.type == "human" else "assistant" if message.type == "ai" else None
         if role is None:
             continue
-        ui_messages.append({
+        msg_data = {
             "id": f"{session_id}-{index}",
             "role": role,
             "content": str(message.content),
-        })
+        }
+        if role == "assistant" and message.additional_kwargs:
+            sources = message.additional_kwargs.get("sources")
+            if sources:
+                msg_data["sources"] = sources
+        ui_messages.append(msg_data)
     return ui_messages
 
 
