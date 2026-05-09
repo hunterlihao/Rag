@@ -1,5 +1,6 @@
 import json
 import hashlib
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -7,6 +8,8 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from rag_app import config
+
+logger = logging.getLogger(__name__)
 
 
 class RedisService:
@@ -153,11 +156,33 @@ class RedisService:
         )
     
     def invalidate_vector_search(self, collection_name: str):
-        """清理集合的所有向量检索缓存(上传新文档后调用)"""
+        """优化 #11: 清理集合的所有向量检索缓存(上传新文档后调用)
+        使用 SCAN 替代 KEYS,避免阻塞 Redis
+        """
         pattern = self._key("vector", "search", collection_name, "*")
-        keys = self._run(self.client.keys, pattern)
-        if keys:
-            self._run(self.client.delete, *keys)
+        self._delete_by_pattern(pattern)
+    
+    def invalidate_user_vector_search(self, user_id: str):
+        """清理用户所有集合的向量检索缓存(用户删除时调用)"""
+        pattern = self._key("vector", "search", f"{config.COLLECTION_NAME}_{user_id[:24]}", "*")
+        self._delete_by_pattern(pattern)
+    
+    def _delete_by_pattern(self, pattern: str):
+        """使用 SCAN 批量删除匹配的key,避免阻塞 Redis"""
+        try:
+            cursor = 0
+            deleted_count = 0
+            while True:
+                cursor, keys = self._run(self.client.scan, cursor, match=pattern, count=100)
+                if keys:
+                    self._run(self.client.delete, *keys)
+                    deleted_count += len(keys)
+                if cursor == 0:
+                    break
+            if deleted_count > 0:
+                logger.debug("清理缓存: pattern=%s, count=%d", pattern, deleted_count)
+        except Exception as exc:
+            logger.warning("清理缓存失败: pattern=%s, error=%s", pattern, str(exc))
     
     # ========== 优化3: 模型实例状态缓存 ==========
     def get_model_status(self, model_id: str) -> dict | None:

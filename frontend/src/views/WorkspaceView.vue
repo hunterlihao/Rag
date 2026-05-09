@@ -2,9 +2,9 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import ActionBusyOverlay from "@/components/ActionBusyOverlay.vue";
 import ChatWorkspace from "@/components/ChatWorkspace.vue";
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
 import { getCurrentUser, logout } from "@/services/auth";
 import { appConfig } from "@/services/config";
 import { buildRouteLocation, buildSidebarNavItems, normalizeShellSession } from "@/services/shell";
@@ -36,17 +36,17 @@ const activeAnswerRequestId = ref("");
 const activeAnswerPrompt = ref("");
 const activeAnswerExpectedMessageCount = ref(0);
 const deletingSessionId = ref("");
+const deleteSuccessDialogVisible = ref(false);
+const deleteSuccessDialogState = reactive({
+  title: "",
+  message: "",
+  items: [],
+});
 const welcomeMessage = ref("你好，我已经准备好结合知识库回答问题了。");
 const startupError = ref("");
 const pageLoading = ref(false);
 
 const sidebarBusy = computed(() => isAnswering.value || !!deletingSessionId.value);
-const deleteBusyState = computed(() => ({
-  visible: !!deletingSessionId.value,
-  badgeText: "删除处理中",
-  title: "正在删除会话",
-  description: "会话记录正在清理并刷新工作区，请等待当前操作完成。",
-}));
 const navItems = computed(() => buildSidebarNavItems(user.value));
 
 const filteredSessions = computed(() => {
@@ -238,11 +238,24 @@ async function handleLogout() {
 
 async function handleDeleteSession(sessionId) {
   if (!sessionId || sidebarBusy.value) return;
+  
+  // 获取会话标题用于成功提示
+  const sessionTitle = sessions.value.find((s) => s.id === sessionId)?.title || "会话";
+  
   deletingSessionId.value = sessionId;
   try {
     const result = await deleteSession(sessionId);
     const wasActive = activeSessionId.value === sessionId;
     sessions.value = sessions.value.filter((s) => s.id !== sessionId);
+    
+    // 显示删除成功弹窗
+    deleteSuccessDialogState.value = {
+      title: "删除成功",
+      message: `「${sessionTitle}」已成功删除`,
+      items: [{ id: sessionId, name: sessionTitle }],
+    };
+    deleteSuccessDialogVisible.value = true;
+    
     if (wasActive) {
       activeSessionId.value = "";
       const nextId = result.next_session_id || sessions.value[0]?.id || "";
@@ -288,6 +301,15 @@ watch(activeSessionId, (id) => {
   storeSessionId(id || "");
 });
 
+// 监听删除成功弹窗关闭，清理状态
+watch(deleteSuccessDialogVisible, (v) => {
+  if (!v) {
+    deleteSuccessDialogState.value.title = "";
+    deleteSuccessDialogState.value.message = "";
+    deleteSuccessDialogState.value.items = [];
+  }
+});
+
 onMounted(async () => {
   pageLoading.value = true;
   try {
@@ -313,12 +335,6 @@ onMounted(async () => {
 
 <template>
   <div class="flex h-screen bg-zinc-50">
-    <ActionBusyOverlay
-      :visible="deleteBusyState.visible"
-      :badge-text="deleteBusyState.badgeText"
-      :title="deleteBusyState.title"
-      :description="deleteBusyState.description"
-    />
     <WorkspaceSidebar
       :user="user"
       :sessions="filteredSessions"
@@ -376,5 +392,17 @@ onMounted(async () => {
         />
       </main>
     </div>
+
+    <!-- 删除会话成功提示对话框 -->
+    <DeleteConfirmDialog
+      v-model="deleteSuccessDialogVisible"
+      tone="success"
+      title="删除成功"
+      :summary="deleteSuccessDialogState.message"
+      :items="deleteSuccessDialogState.items"
+      badge-text="会话已删除"
+      confirm-text="知道了"
+      @confirm="deleteSuccessDialogVisible = false"
+    />
   </div>
 </template>

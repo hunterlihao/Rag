@@ -6,6 +6,8 @@ import re
 import time
 import uuid
 import asyncio
+import csv
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,28 +16,25 @@ from threading import Event, Lock
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy.orm import Session
 
 from rag_app import config
 from rag_app.exceptions import FileValidationError
-from rag_app.services.auth_service import AuthService
+from rag_app.services.service_container import (
+    redis_service,
+    auth_service,
+    workspace_service,
+    user_service,
+)
 from rag_app.services.knowledge_base import DUPLICATE_MESSAGE, KnowledgeBaseService
 from rag_app.services.rag_service import RagService
-from rag_app.services.redis_service import RedisService
-from rag_app.services.user_service import UserService
-from rag_app.services.workspace_service import WorkspaceService
 from rag_app.storage.database import SessionLocal, get_db, init_database
 from rag_app.storage.models import User
 from rag_app.utils.logging_config import get_request_id, reset_log_context, set_log_context
 from rag_app.validators import validate_upload_file
-
-redis_service = RedisService()
-auth_service = AuthService(redis_service=redis_service)
-workspace_service = WorkspaceService(redis_service=redis_service)
-user_service = UserService(auth_service=auth_service)
 bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -333,17 +332,23 @@ answer_run_registry = AnswerRunRegistry()
 
 
 class WebSocketManager:
-    """WebSocket 连接管理器，用于推送上传进度"""
-    # 修复: 添加连接数限制和心跳机制
+    """优化 #12: WebSocket 连接管理器，用于推送上传进度
+    改进:
+    1. 使用信号量限制并发心跳任务
+    2. 添加连接健康检查
+    3. 优化内存使用
+    """
     MAX_CONNECTIONS = 1000  # 最大连接数
     HEARTBEAT_INTERVAL = 30  # 心跳间隔(秒)
     HEARTBEAT_TIMEOUT = 90  # 心跳超时时间(秒)
+    MAX_HEARTBEAT_TASKS = 100  # 最大并发心跳任务数
     
     def __init__(self):
         self._connections: dict[str, WebSocket] = {}
         self._lock = Lock()
         self._heartbeat_tasks: dict[str, asyncio.Task] = {}  # 心跳任务
         self._last_activity: dict[str, float] = {}  # 最后活动时间
+        self._heartbeat_semaphore = asyncio.Semaphore(self.MAX_HEARTBEAT_TASKS)  # 限制并发
     
     async def connect(self, websocket: WebSocket, user_id: str):
         # 注意: 不再调用websocket.accept(),因为端点函数已经在认证前accept了
@@ -1123,6 +1128,73 @@ def create_app() -> FastAPI:
             "sessions": sessions,
         }
 
+    @app.get("/api/sessions/{session_id}/export")
+    def export_session(
+        session_id: str,
+        request: Request,
+        user=Depends(get_current_user),
+        database: Session = Depends(get_db),
+    ):
+        """优化 #20: 导出对话记录为 CSV 或 JSON"""
+        from rag_app.storage.chat_history import load_session_messages
+        
+        try:
+            session = workspace_service.require_session(database, user, session_id)
+        except ValueError as exc:
+            build_error(status.HTTP_404_NOT_FOUND, str(exc))
+        
+        # 获取导出格式参数
+        query_params = request.query_params
+        export_format = query_params.get("format", "json").lower()
+        
+        # 加载消息
+        messages = load_session_messages(session_id)
+        
+        if export_format == "csv":
+            # CSV 格式导出
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # 写入表头
+            writer.writerow(["角色", "内容", "时间戳"])
+            
+            # 写入消息
+            for msg in messages:
+                writer.writerow([
+                    "用户" if msg["role"] == "user" else "助手",
+                    msg["content"],
+                    ""
+                ])
+            
+            # 生成CSV文件
+            csv_content = output.getvalue()
+            output.close()
+            
+            filename = f"chat_{session_id[:8]}.csv"
+            headers = {
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "text/csv; charset=utf-8-sig",
+            }
+            return Response(content=csv_content.encode("utf-8-sig"), headers=headers)
+        
+        else:
+            # JSON 格式导出（默认）
+            export_data = {
+                "session_id": session_id,
+                "title": session.title,
+                "message_count": len(messages),
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "messages": messages,
+            }
+            
+            json_content = json.dumps(export_data, ensure_ascii=False, indent=2)
+            filename = f"chat_{session_id[:8]}.json"
+            headers = {
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "application/json; charset=utf-8",
+            }
+            return Response(content=json_content.encode("utf-8"), headers=headers)
+
     @app.post("/api/sessions/{session_id}/ask")
     def ask_session(
         session_id: str,
@@ -1315,8 +1387,29 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/uploads")
-    def list_uploads(user=Depends(get_current_user), database: Session = Depends(get_db)):
-        return {"uploads": workspace_service.list_uploads(database, user)}
+    def list_uploads(
+        request: Request,
+        user=Depends(get_current_user), 
+        database: Session = Depends(get_db)
+    ):
+        """优化 #19: 添加搜索功能的上传列表"""
+        # 获取搜索参数
+        query_params = request.query_params
+        search_query = query_params.get("q", "").strip()
+        
+        # 如果搜索词为空，返回所有
+        if not search_query:
+            uploads = workspace_service.list_uploads(database, user)
+            return {"uploads": uploads, "total": len(uploads)}
+        
+        # 搜索逻辑：匹配文件名
+        all_uploads = workspace_service.list_uploads(database, user)
+        filtered_uploads = [
+            upload for upload in all_uploads
+            if search_query.lower() in upload.get("name", "").lower()
+        ]
+        
+        return {"uploads": filtered_uploads, "total": len(filtered_uploads)}
 
     @app.post("/api/uploads")
     async def upload_files(

@@ -3,7 +3,6 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeft, User, Mail, Lock, Shield, Trash2, Plus, X, Loader2, Search, RefreshCw, Users, UserCheck, AlertCircle } from "lucide-vue-next";
 
-import ActionBusyOverlay from "@/components/ActionBusyOverlay.vue";
 import DeleteConfirmDialog from "@/components/DeleteConfirmDialog.vue";
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue";
 import { getCurrentUser, logout, replaceCurrentUser } from "@/services/auth";
@@ -21,6 +20,12 @@ const tableLoading = ref(false);
 const saving = ref(false);
 const deletingSessionId = ref("");
 const deletingUserId = ref("");
+const deleteSessionSuccessDialogVisible = ref(false);
+const deleteSessionSuccessDialogState = reactive({
+  title: "",
+  message: "",
+  items: [],
+});
 const sessionSearch = ref("");
 const userKeyword = ref("");
 const activeSessionId = ref("");
@@ -59,12 +64,6 @@ const formRules = computed(() => ({
   password: formMode.value === "create" ? { required: true, message: "密码至少6位", min: 6 } : null,
 }));
 
-const busyOverlayState = computed(() => {
-  if (deletingUserId.value) return { visible: true, badgeText: "删除中", title: "正在删除用户", description: "用户数据正在清理。" };
-  if (deletingSessionId.value) return { visible: true, badgeText: "删除处理中", title: "正在删除会话", description: "会话记录正在清理。" };
-  return { visible: false };
-});
-
 function normalizeUserRow(row) {
   return {
     id: row.id,
@@ -102,8 +101,25 @@ async function createNewSession() { const s = await createSession(); router.push
 function selectSession(id) { router.push(buildRouteLocation("workspace", id)); }
 async function handleDeleteSession(id) {
   if (!id || sidebarBusy.value) return;
+  
+  // 获取会话标题
+  const sessionTitle = workspace.sessions.find((s) => s.id === id)?.title || "会话";
+  
   deletingSessionId.value = id;
-  try { await deleteSession(id); workspace.sessions = workspace.sessions.filter((s) => s.id !== id); } finally { deletingSessionId.value = ""; }
+  try { 
+    await deleteSession(id); 
+    workspace.sessions = workspace.sessions.filter((s) => s.id !== id);
+    
+    // 显示删除成功弹窗
+    deleteSessionSuccessDialogState.value = {
+      title: "删除成功",
+      message: `「${sessionTitle}」已成功删除`,
+      items: [{ id, name: sessionTitle }],
+    };
+    deleteSessionSuccessDialogVisible.value = true;
+  } finally { 
+    deletingSessionId.value = ""; 
+  }
 }
 async function handleLogout() { await logout(); router.push("/login"); }
 function toggleSidebarCollapse() { preferences.value = savePreferences({ ...preferences.value, sidebarCollapsed: !preferences.value.sidebarCollapsed }, user.value); }
@@ -187,6 +203,15 @@ watch(activeSessionId, (id) => {
   storeSessionId(id || "");
 });
 
+// 监听删除成功弹窗关闭，清理状态
+watch(deleteSessionSuccessDialogVisible, (v) => {
+  if (!v) {
+    deleteSessionSuccessDialogState.value.title = "";
+    deleteSessionSuccessDialogState.value.message = "";
+    deleteSessionSuccessDialogState.value.items = [];
+  }
+});
+
 onMounted(async () => {
   pageLoading.value = true;
   try {
@@ -204,8 +229,6 @@ onMounted(async () => {
 
 <template>
   <div class="flex h-screen bg-zinc-50">
-    <ActionBusyOverlay v-bind="busyOverlayState" />
-
     <WorkspaceSidebar
       :user="user"
       :sessions="filteredSessions"
@@ -224,6 +247,18 @@ onMounted(async () => {
       @toggle-collapse="toggleSidebarCollapse"
       @update:search-value="sessionSearch = $event"
       @logout="handleLogout"
+    />
+
+    <!-- 删除会话成功提示对话框 -->
+    <DeleteConfirmDialog
+      v-model="deleteSessionSuccessDialogVisible"
+      tone="success"
+      title="删除成功"
+      :summary="deleteSessionSuccessDialogState.message"
+      :items="deleteSessionSuccessDialogState.items"
+      badge-text="会话已删除"
+      confirm-text="知道了"
+      @confirm="deleteSessionSuccessDialogVisible = false"
     />
 
     <div class="flex-1 flex flex-col min-w-0">

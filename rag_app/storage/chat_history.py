@@ -52,45 +52,77 @@ def delete_session_messages(database: Session, session_id: str):
 
 
 def list_sessions(limit: int = 30) -> list[dict]:
+    """优化 #9: 使用聚合查询替代全表扫描，避免 N+1 查询问题"""
     try:
         engine = create_engine(
             config.POSTGRES_CONNECTION_URL,
             **config.POSTGRES_ENGINE_ARGS,
         )
-        row_limit = max(limit * 40, 200)
-        sql = text(
-            f"SELECT id, session_id, message FROM {config.CHAT_HISTORY_TABLE_NAME} "
-            "ORDER BY id DESC LIMIT :row_limit"
-        )
+        
+        # 使用子查询获取每个会话的第一条用户消息和最后一条消息
+        sql = text("""
+            WITH session_stats AS (
+                SELECT 
+                    session_id,
+                    COUNT(*) as message_count,
+                    MAX(id) as last_message_id
+                FROM {table_name}
+                GROUP BY session_id
+            ),
+            first_user_messages AS (
+                SELECT DISTINCT ON (session_id)
+                    session_id,
+                    message->'data'->>'content' as first_user_content
+                FROM {table_name}
+                WHERE message->>'type' = 'human'
+                    AND message->'data'->>'content' IS NOT NULL
+                    AND message->'data'->>'content' != ''
+                ORDER BY session_id, id ASC
+            ),
+            last_messages AS (
+                SELECT DISTINCT ON (session_id)
+                    session_id,
+                    message->'data'->>'content' as last_content
+                FROM {table_name}
+                ORDER BY session_id, id DESC
+            )
+            SELECT 
+                ss.session_id,
+                ss.message_count,
+                ss.last_message_id,
+                fum.first_user_content,
+                lm.last_content
+            FROM session_stats ss
+            LEFT JOIN first_user_messages fum ON ss.session_id = fum.session_id
+            LEFT JOIN last_messages lm ON ss.session_id = lm.session_id
+            ORDER BY ss.last_message_id DESC
+            LIMIT :limit
+        """.format(table_name=config.CHAT_HISTORY_TABLE_NAME))
 
-        sessions = {}
+        sessions = []
         with engine.connect() as connection:
-            rows = connection.execute(sql, {"row_limit": row_limit}).fetchall()
+            rows = connection.execute(sql, {"limit": limit}).fetchall()
 
         for row in rows:
-            session_id = row.session_id
-            payload = json.loads(row.message)
-            content = str(payload.get("data", {}).get("content", "")).strip()
-            role = payload.get("type")
+            # 提取会话标题（从第一条用户消息）
+            title = "新会话"
+            if row.first_user_content:
+                title = truncate_text(str(row.first_user_content), 18)
+            
+            # 提取预览（从最后一条消息）
+            preview = "还没有消息"
+            if row.last_content:
+                preview = truncate_text(str(row.last_content), 34)
+            
+            sessions.append({
+                "session_id": row.session_id,
+                "title": title,
+                "preview": preview,
+                "message_count": row.message_count,
+                "last_message_id": row.last_message_id,
+            })
 
-            if session_id not in sessions:
-                sessions[session_id] = {
-                    "session_id": session_id,
-                    "title": "新会话",
-                    "preview": "还没有消息",
-                    "message_count": 0,
-                    "last_message_id": row.id,
-                }
-
-            sessions[session_id]["message_count"] += 1
-
-            if content and sessions[session_id]["preview"] == "还没有消息":
-                sessions[session_id]["preview"] = truncate_text(content, 34)
-
-            if role == "human" and content and sessions[session_id]["title"] == "新会话":
-                sessions[session_id]["title"] = truncate_text(content, 18)
-
-        return list(sessions.values())[:limit]
+        return sessions
     except Exception as exc:
         raise RuntimeError(
             "读取 PostgreSQL 会话列表失败，请确认数据库已启动并且历史表可访问。"

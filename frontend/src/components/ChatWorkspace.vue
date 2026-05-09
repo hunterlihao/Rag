@@ -1,7 +1,8 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { ArrowUp, Database, Sparkles, Square, Copy, Check, ChevronDown, FolderOpen, ArrowRight, StopCircle } from "lucide-vue-next";
+import { ArrowUp, Database, Sparkles, Square, Copy, Check, ChevronDown, FolderOpen, ArrowRight, StopCircle, Download } from "lucide-vue-next";
 import { renderMarkdown } from "@/services/markdown";
+import { exportSession, downloadFile } from "@/services/workspace";
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -26,6 +27,7 @@ const messagePaneRef = ref(null);
 const showModelMenu = ref(false);
 const showModeMenu = ref(false);
 const copiedMsgId = ref(null);
+const exporting = ref(false);
 
 const answerModeOptions = [
   { label: "自动", value: "auto", desc: "自动判断是否需要检索知识库" },
@@ -140,6 +142,22 @@ function closePopovers() {
   showModeMenu.value = false;
 }
 
+async function handleExport(format = "json") {
+  if (!props.session?.id || exporting.value) return;
+  
+  exporting.value = true;
+  try {
+    const blob = await exportSession(props.session.id, format);
+    const filename = `chat_${props.session.id.slice(0, 8)}.${format}`;
+    downloadFile(blob, filename);
+  } catch (error) {
+    console.error("导出失败:", error);
+    alert(error.message || "导出失败，请稍后重试");
+  } finally {
+    exporting.value = false;
+  }
+}
+
 watch(() => messageScrollSignature.value, async () => {
   await nextTick();
   if (messagePaneRef.value) {
@@ -175,6 +193,21 @@ watch(() => messageScrollSignature.value, async () => {
           <div>
             <h2 class="text-[13px] font-semibold text-zinc-900">{{ session.title || '新对话' }}</h2>
             <p class="text-[11px] text-zinc-500">{{ renderedMessages.length }} 条消息 · {{ providerLabel }}</p>
+          </div>
+        </div>
+        
+        <!-- 导出按钮 -->
+        <div v-if="renderedMessages.length > 0" class="flex items-center gap-2">
+          <div class="relative">
+            <button 
+              @click.stop="handleExport('json')" 
+              :disabled="exporting"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-600 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="导出为 JSON"
+            >
+              <Download class="w-3.5 h-3.5" />
+              <span class="hidden sm:inline">{{ exporting ? '导出中...' : '导出' }}</span>
+            </button>
           </div>
         </div>
       </div>

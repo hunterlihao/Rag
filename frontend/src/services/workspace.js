@@ -214,6 +214,52 @@ export async function stopPromptStream(sessionId, answerRequestId = "") {
   });
 }
 
+/**
+ * 导出对话记录
+ * @param {string} sessionId - 会话 ID
+ * @param {string} format - 导出格式: 'json' 或 'csv'
+ * @returns {Promise<Blob>} 文件 Blob
+ */
+export async function exportSession(sessionId, format = "json") {
+  const session = getSession();
+  const headers = new Headers();
+  
+  if (session?.token) {
+    headers.set("Authorization", `Bearer ${session.token}`);
+  }
+
+  const response = await fetch(
+    `${appConfig.apiBaseUrl}/sessions/${sessionId}/export?format=${format}`,
+    {
+      method: "GET",
+      headers,
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || error.message || "导出失败");
+  }
+
+  return await response.blob();
+}
+
+/**
+ * 下载文件
+ * @param {Blob} blob - 文件 Blob
+ * @param {string} filename - 文件名
+ */
+export function downloadFile(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
 export async function fetchUploads() {
   const result = await requestJson(appConfig.apiBaseUrl, "/uploads");
   return result.uploads || [];
