@@ -485,7 +485,7 @@ onUnmounted(() => {
 
 <template>
   <div class="flex h-screen bg-zinc-50">
-    <ActionBusyOverlay v-bind="busyOverlayState" />
+<!--    <ActionBusyOverlay v-bind="busyOverlayState" />-->
 
     <WorkspaceSidebar
       :user="user"
@@ -520,7 +520,11 @@ onUnmounted(() => {
 
       <div class="flex-1 overflow-y-auto">
         <div v-if="pageLoading" class="flex items-center justify-center h-full">
-          <Loader2 class="w-6 h-6 text-zinc-300 animate-spin" />
+          <div class="flex gap-1.5">
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 300ms" />
+          </div>
         </div>
 
         <div v-else class="max-w-6xl mx-auto px-6 py-6 space-y-6">

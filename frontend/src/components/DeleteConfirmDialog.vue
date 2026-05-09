@@ -76,7 +76,11 @@ function handleConfirm() {
           {{ cancelText }}
         </button>
         <button @click="handleConfirm" :disabled="loading" :class="['flex-1 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-70', isSuccess ? 'bg-green-500 hover:bg-green-600' : isWarning ? 'bg-amber-500 hover:bg-amber-600' : isPrimary ? 'bg-zinc-900 hover:bg-zinc-800' : 'bg-red-500 hover:bg-red-600']">
-          <svg v-if="loading" class="animate-spin w-4 h-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <div v-if="loading" class="flex gap-1">
+            <span class="w-1 h-1 bg-white rounded-full animate-bounce" />
+            <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 150ms" />
+            <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 300ms" />
+          </div>
           {{ loading ? '处理中...' : confirmText }}
         </button>
       </div>

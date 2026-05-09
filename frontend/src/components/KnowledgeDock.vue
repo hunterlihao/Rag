@@ -115,7 +115,11 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
   <div class="flex flex-col h-full">
     <!-- Busy notice -->
     <div v-if="operationBusy" class="mx-4 mt-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 flex items-center gap-2 shrink-0">
-      <Loader2 class="w-3.5 h-3.5 animate-spin" />
+      <div class="flex gap-1">
+        <span class="w-1 h-1 bg-amber-600 rounded-full animate-bounce" />
+        <span class="w-1 h-1 bg-amber-600 rounded-full animate-bounce" style="animation-delay: 150ms" />
+        <span class="w-1 h-1 bg-amber-600 rounded-full animate-bounce" style="animation-delay: 300ms" />
+      </div>
       知识库操作正在进行，请等待完成后再操作。
     </div>
 
@@ -249,7 +253,13 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
             class="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-100 rounded-lg transition shrink-0"
             :class="pageMode ? 'absolute top-1.5 right-1.5' : ''"
           >
-            <Loader2 v-if="deletingUploadId === upload.id" class="w-3.5 h-3.5 animate-spin" />
+            <template v-if="deletingUploadId === upload.id">
+              <div class="flex gap-0.5">
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" />
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" style="animation-delay: 150ms" />
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" style="animation-delay: 300ms" />
+              </div>
+            </template>
             <Trash2 v-else class="w-3.5 h-3.5" />
           </button>
         </div>

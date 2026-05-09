@@ -200,7 +200,12 @@ async function submitReset() {
               class="w-full h-[46px] bg-zinc-900 text-white text-sm font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
             >
               <template v-if="loading">
-                <Loader2 class="w-4 h-4 animate-spin" /> 重置中...
+                <div class="flex gap-1">
+                  <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" />
+                  <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 150ms" />
+                  <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 300ms" />
+                </div>
+                重置中...
               </template>
               <template v-else>
                 重置密码 <ArrowRight class="w-4 h-4" />

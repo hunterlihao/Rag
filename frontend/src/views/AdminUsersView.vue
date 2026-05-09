@@ -213,7 +213,11 @@ onMounted(async () => {
 
       <div class="flex-1 overflow-y-auto">
         <div v-if="pageLoading" class="flex items-center justify-center h-full">
-          <Loader2 class="w-6 h-6 text-zinc-300 animate-spin" />
+          <div class="flex gap-1.5">
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 300ms" />
+          </div>
         </div>
 
         <div v-else class="max-w-6xl mx-auto px-6 py-6 space-y-6">
@@ -284,7 +288,11 @@ onMounted(async () => {
               <tbody>
                 <tr v-if="tableLoading">
                   <td colspan="5" class="text-center py-12">
-                    <Loader2 class="w-5 h-5 text-zinc-300 animate-spin mx-auto" />
+                    <div class="flex gap-1.5 justify-center">
+                      <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" />
+                      <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
+                      <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 300ms" />
+                    </div>
                   </td>
                 </tr>
                 <tr v-else-if="!userRows.length">
@@ -357,7 +365,13 @@ onMounted(async () => {
           <div class="flex gap-3 pt-2">
             <button @click="dialogVisible = false" :disabled="saving" class="flex-1 h-10 border border-zinc-200 text-zinc-700 rounded-xl text-sm font-medium hover:bg-zinc-50 transition-colors">取消</button>
             <button @click="submitUserForm" :disabled="saving" class="flex-1 h-10 bg-zinc-900 text-white rounded-xl text-sm font-medium hover:bg-zinc-800 transition-colors flex items-center justify-center gap-2 disabled:opacity-70">
-              <Loader2 v-if="saving" class="w-4 h-4 animate-spin" />
+              <template v-if="saving">
+                <div class="flex gap-1">
+                  <span class="w-1 h-1 bg-white rounded-full animate-bounce" />
+                  <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 150ms" />
+                  <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 300ms" />
+                </div>
+              </template>
               {{ saving ? '保存中...' : '保存' }}
             </button>
           </div>

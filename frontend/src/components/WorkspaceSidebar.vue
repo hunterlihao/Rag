@@ -116,7 +116,13 @@ function onSearchInput(e) { emit("update:search-value", e.target.value); }
             </div>
           </button>
           <button @click.stop="requestDelete(s)" :disabled="busy" class="p-1 text-zinc-300 hover:text-red-500 hover:bg-red-50 rounded transition-all shrink-0">
-            <Loader2 v-if="deletingSessionId === s.id" class="w-3.5 h-3.5 animate-spin" />
+            <template v-if="deletingSessionId === s.id">
+              <div class="flex gap-0.5">
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" />
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" style="animation-delay: 150ms" />
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" style="animation-delay: 300ms" />
+              </div>
+            </template>
             <Trash2 v-else class="w-3.5 h-3.5" />
           </button>
         </div>
@@ -200,7 +206,13 @@ function onSearchInput(e) { emit("update:search-value", e.target.value); }
             </div>
           </button>
           <button @click.stop="requestDelete(s)" :disabled="busy" class="p-1 text-zinc-300 hover:text-red-500 hover:bg-red-50 rounded transition-all shrink-0">
-            <Loader2 v-if="deletingSessionId === s.id" class="w-3.5 h-3.5 animate-spin" />
+            <template v-if="deletingSessionId === s.id">
+              <div class="flex gap-0.5">
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" />
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" style="animation-delay: 150ms" />
+                <span class="w-1 h-1 bg-red-500 rounded-full animate-bounce" style="animation-delay: 300ms" />
+              </div>
+            </template>
             <Trash2 v-else class="w-3.5 h-3.5" />
           </button>
         </div>

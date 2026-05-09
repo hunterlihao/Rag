@@ -180,7 +180,11 @@ onMounted(async () => {
 
       <div class="flex-1 overflow-y-auto">
         <div v-if="pageLoading" class="flex items-center justify-center h-full">
-          <Loader2 class="w-6 h-6 text-zinc-300 animate-spin" />
+          <div class="flex gap-1.5">
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
+            <span class="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 300ms" />
+          </div>
         </div>
 
         <div v-else class="max-w-3xl mx-auto px-6 py-6 space-y-6">
@@ -240,7 +244,14 @@ onMounted(async () => {
                 <div v-if="profileError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs"><AlertCircle class="w-3.5 h-3.5" /> {{ profileError }}</div>
                 <div v-if="profileSuccess" class="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg text-xs"><CheckCircle class="w-3.5 h-3.5" /> {{ profileSuccess }}</div>
                 <button @click="saveProfile" :disabled="profileLoading" class="px-4 py-2 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center gap-2 disabled:opacity-70">
-                  <Loader2 v-if="profileLoading" class="w-3.5 h-3.5 animate-spin" /> 保存资料
+                  <template v-if="profileLoading">
+                    <div class="flex gap-1">
+                      <span class="w-1 h-1 bg-white rounded-full animate-bounce" />
+                      <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 150ms" />
+                      <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 300ms" />
+                    </div>
+                  </template>
+                  保存资料
                 </button>
               </div>
             </div>
@@ -273,7 +284,14 @@ onMounted(async () => {
                 <div v-if="passwordError" class="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg text-xs"><AlertCircle class="w-3.5 h-3.5" /> {{ passwordError }}</div>
                 <div v-if="passwordSuccess" class="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg text-xs"><CheckCircle class="w-3.5 h-3.5" /> {{ passwordSuccess }}</div>
                 <button @click="savePassword" :disabled="passwordLoading" class="px-4 py-2 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center gap-2 disabled:opacity-70">
-                  <Loader2 v-if="passwordLoading" class="w-3.5 h-3.5 animate-spin" /> 更新密码
+                  <template v-if="passwordLoading">
+                    <div class="flex gap-1">
+                      <span class="w-1 h-1 bg-white rounded-full animate-bounce" />
+                      <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 150ms" />
+                      <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 300ms" />
+                    </div>
+                  </template>
+                  更新密码
                 </button>
               </div>
             </div>
@@ -353,7 +371,14 @@ onMounted(async () => {
             </div>
 
             <button @click="saveUserPreferences" :disabled="preferenceLoading" class="mt-4 px-4 py-2 bg-zinc-900 text-white text-xs font-medium rounded-lg hover:bg-zinc-800 transition-colors flex items-center gap-2 disabled:opacity-70">
-              <Loader2 v-if="preferenceLoading" class="w-3.5 h-3.5 animate-spin" /> 保存偏好设置
+              <template v-if="preferenceLoading">
+                <div class="flex gap-1">
+                  <span class="w-1 h-1 bg-white rounded-full animate-bounce" />
+                  <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 150ms" />
+                  <span class="w-1 h-1 bg-white rounded-full animate-bounce" style="animation-delay: 300ms" />
+                </div>
+              </template>
+              保存偏好设置
             </button>
           </div>
         </div>

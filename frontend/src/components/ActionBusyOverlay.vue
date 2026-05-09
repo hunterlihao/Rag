@@ -13,7 +13,11 @@ defineProps({
       <div class="bg-white rounded-2xl shadow-lg border border-zinc-100 px-8 py-6 text-center max-w-sm mx-4">
         <span class="inline-block px-3 py-1 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium mb-4">{{ badgeText }}</span>
         <div class="w-10 h-10 mx-auto mb-3 rounded-full bg-zinc-100 flex items-center justify-center">
-          <svg class="animate-spin w-5 h-5 text-zinc-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <div class="flex gap-1">
+            <span class="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" />
+            <span class="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 150ms" />
+            <span class="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style="animation-delay: 300ms" />
+          </div>
         </div>
         <h3 class="text-sm font-semibold text-zinc-900 mb-1">{{ title }}</h3>
         <p v-if="description" class="text-xs text-zinc-500">{{ description }}</p>
