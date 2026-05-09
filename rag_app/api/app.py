@@ -7,6 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 from threading import Event, Lock
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
@@ -465,6 +466,24 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # 安全漏洞修复6: 请求体大小限制中间件
+    @app.middleware("http")
+    async def limit_request_size(request: Request, call_next):
+        """限制请求体大小,防止DoS攻击"""
+        # 只检查POST/PUT/PATCH请求
+        if request.method in ["POST", "PUT", "PATCH"]:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                # 限制为100MB(适应文件上传需求)
+                max_size = 100 * 1024 * 1024  # 100MB
+                if int(content_length) > max_size:
+                    return JSONResponse(
+                        status_code=status.HTTP_413_PAYLOAD_TOO_LARGE,
+                        content={"detail": "请求体过大,最大支持100MB"},
+                        headers={"X-Request-ID": request.headers.get("x-request-id") or str(uuid.uuid4())},
+                    )
+        return await call_next(request)
+
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
@@ -554,20 +573,47 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws/uploads")
     async def websocket_upload_progress(websocket: WebSocket, token: str):
-        """WebSocket 端点，用于推送上传进度"""
+        """WebSocket 端点,用于推送上传进度"""
+        database = SessionLocal()
         try:
-            payload = auth_service.decode_access_token(token)
+            # 安全漏洞修复2: 完整的Token验证逻辑
+            # 1. 解码Token
+            try:
+                payload = auth_service.decode_access_token(token)
+            except Exception:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token无效")
+                return
+                
             user_id = str(payload.get("sub", "")).strip()
-        except Exception:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败")
-            return
-
-        await websocket_manager.connect(websocket, user_id)
-        try:
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            websocket_manager.disconnect(user_id)
+            if not user_id:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token缺少用户标识")
+                return
+                
+            # 2. 检查Token是否已吊销
+            if auth_service.is_token_revoked(payload):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token已吊销")
+                return
+                
+            # 3. 检查用户是否存在
+            user = auth_service.get_user(database, user_id)
+            if user is None:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:用户不存在")
+                return
+                
+            # 4. 检查Token版本是否匹配
+            if not auth_service.is_token_current(payload, user):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token已过期")
+                return
+                
+            # 5. 验证通过,建立连接
+            await websocket_manager.connect(websocket, user_id)
+            try:
+                while True:
+                    await websocket.receive_text()
+            except WebSocketDisconnect:
+                websocket_manager.disconnect(user_id)
+        finally:
+            database.close()
 
     @app.post("/api/auth/register")
     def register(
@@ -1095,11 +1141,24 @@ def create_app() -> FastAPI:
         for order, upload in enumerate(files):
             filename = str(upload.filename or "").strip() or "未命名文件"
             content_type = upload.content_type or "unknown"
+                    
+            # 安全漏洞修复1: 验证文件扩展名
+            file_suffix = Path(filename).suffix.lower().lstrip(".")
+            if not file_suffix or file_suffix not in config.SUPPORTED_UPLOAD_EXTENSIONS:
+                build_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"不支持的文件格式: {file_suffix or '无扩展名'}。支持的格式: {', '.join(config.SUPPORTED_UPLOAD_EXTENSIONS)}",
+                )
+                    
+            # 验证文件名安全性
+            if not re.match(r'^[\w\-\.\u4e00-\u9fa5\s]+$', filename):
+                build_error(status.HTTP_400_BAD_REQUEST, "文件名包含非法字符,请使用安全的文件名")
+                    
             try:
                 size_bytes = get_upload_size(upload)
             except Exception:
                 logger.exception("Failed to read upload size.")
-                build_error(status.HTTP_400_BAD_REQUEST, f"读取文件大小失败：{filename}，请重新选择文件。")
+                build_error(status.HTTP_400_BAD_REQUEST, f"读取文件大小失败:{filename},请重新选择文件。")
 
             total_batch_size += size_bytes
             prepared_uploads.append({

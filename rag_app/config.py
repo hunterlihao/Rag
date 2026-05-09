@@ -325,13 +325,20 @@ def build_chroma_kwargs(collection_name: str, embedding_function):
 
 def validate_server_config():
     if not API_SECRET_KEY:
-        raise RuntimeError("请在 .env 中配置 RAG_API_SECRET_KEY，不能为空。")
+        raise RuntimeError("请在 .env 中配置 RAG_API_SECRET_KEY,不能为空。")
 
     if API_SECRET_KEY == "rag-dev-secret-change-me":
         raise RuntimeError("请把 RAG_API_SECRET_KEY 改成随机密钥后再启动服务。")
+    
+    # 安全漏洞修复9: 验证JWT密钥强度
+    if len(API_SECRET_KEY) < 32:
+        raise RuntimeError(
+            "RAG_API_SECRET_KEY 长度至少为32字符,建议使用更强的随机密钥。\n"
+            "生成方法: python -c 'import secrets; print(secrets.token_hex(32))'"
+        )
 
     if not ADMIN_BOOTSTRAP_EMAIL:
-        raise RuntimeError("请在 .env 中配置 RAG_ADMIN_EMAIL，用于初始化管理员账号。")
+        raise RuntimeError("请在 .env 中配置 RAG_ADMIN_EMAIL,用于初始化管理员账号。")
 
     if not ADMIN_BOOTSTRAP_PASSWORD:
-        raise RuntimeError("请在 .env 中配置 RAG_ADMIN_PASSWORD，用于初始化管理员账号。")
+        raise RuntimeError("请在 .env 中配置 RAG_ADMIN_PASSWORD,用于初始化管理员账号。")
