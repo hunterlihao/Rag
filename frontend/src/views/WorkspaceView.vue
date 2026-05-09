@@ -259,11 +259,33 @@ function toggleSidebarCollapse() {
   preferences.value = savePreferences({ ...preferences.value, sidebarCollapsed: !preferences.value.sidebarCollapsed }, user.value);
 }
 
+// Session 相关逻辑优化：使用 localStorage 替代 URL query
+const STORAGE_KEY_SESSION = "rag.workspace.sessionId";
+
+function getStoredSessionId() {
+  try {
+    return localStorage.getItem(STORAGE_KEY_SESSION) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storeSessionId(id) {
+  try {
+    if (id) {
+      localStorage.setItem(STORAGE_KEY_SESSION, id);
+    } else {
+      localStorage.removeItem(STORAGE_KEY_SESSION);
+    }
+  } catch {
+    // 忽略存储错误
+  }
+}
+
 watch(activeSessionId, (id) => {
   if (route.name !== "workspace") return;
-  const q = typeof route.query.session === "string" ? route.query.session : "";
-  if ((id || "") === q) return;
-  router.replace({ name: "workspace", query: id ? { session: id } : {} });
+  // 使用 localStorage 存储，不再暴露在 URL 中
+  storeSessionId(id || "");
 });
 
 onMounted(async () => {
@@ -279,7 +301,7 @@ onMounted(async () => {
     modelSettings.chatModels = Array.isArray(meta.chat_models) ? meta.chat_models : [];
     syncChatModelPreference();
     startupError.value = meta.startup_error || "";
-    const preferredId = typeof route.query.session === "string" ? route.query.session : "";
+    const preferredId = typeof route.query.session === "string" ? route.query.session : getStoredSessionId();
     await refreshSessions(preferredId);
   } catch {
     if (!getCurrentUser()) router.push("/login");

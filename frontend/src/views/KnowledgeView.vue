@@ -32,6 +32,59 @@ const deletingSessionId = ref("");
 const batchDeleting = ref(false);
 const startupError = ref("");
 const uploadTasks = ref([]);
+const UPLOAD_TASKS_STORAGE_KEY = "rag.knowledge.uploadTasks";
+
+// 从 localStorage 恢复上传任务
+function restoreUploadTasks() {
+  try {
+    const saved = localStorage.getItem(UPLOAD_TASKS_STORAGE_KEY);
+    if (saved) {
+      const tasks = JSON.parse(saved);
+      // 只恢复最近 30 分钟内的任务
+      const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+      const recentTasks = tasks.filter(t => {
+        if (!t.timestamp) return false;
+        return t.timestamp > thirtyMinutesAgo && (t.status === 'processing' || t.status === 'uploading');
+      });
+      if (recentTasks.length > 0) {
+        uploadTasks.value = recentTasks;
+        // 恢复 pendingTaskIds
+        recentTasks.forEach(t => {
+          if (t.id && (t.status === 'processing' || t.status === 'uploading')) {
+            pendingTaskIds.value.add(t.id);
+          }
+        });
+      }
+    }
+  } catch (error) {
+    console.warn('恢复上传任务失败:', error);
+  }
+}
+
+// 保存上传任务到 localStorage
+function saveUploadTasks() {
+  try {
+    const tasksToSave = uploadTasks.value.map(t => ({
+      ...t,
+      timestamp: Date.now()
+    }));
+    localStorage.setItem(UPLOAD_TASKS_STORAGE_KEY, JSON.stringify(tasksToSave));
+  } catch (error) {
+    console.warn('保存上传任务失败:', error);
+  }
+}
+
+// 清理过期的上传任务
+function cleanupUploadTasks() {
+  const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+  uploadTasks.value = uploadTasks.value.filter(t => {
+    // 保留最近的任务或未完成的任务
+    if (!t.timestamp) return true;
+    if (t.status === 'uploading' || t.status === 'processing') return true;
+    return t.timestamp > thirtyMinutesAgo;
+  });
+  saveUploadTasks();
+}
 const selectedUploadIds = ref([]);
 const deleteDialogVisible = ref(false);
 const deleteDialogState = ref({ tone: "danger", title: "", summary: "", hint: "", items: [], extra: "", confirmText: "确认删除", onConfirm: null });
@@ -179,6 +232,7 @@ async function importFiles(fileList) {
     status: "uploading",
   }));
   uploadTasks.value = [...uploadTasks.value, ...tasks];
+  saveUploadTasks(); // 保存任务状态
 
   const formData = new FormData();
   files.forEach((f) => formData.append("files", f));
@@ -244,6 +298,10 @@ async function importFiles(fileList) {
 
     if (uploadTasks.value.every((t) => t.status !== "uploading" && t.status !== "processing")) {
       await refreshUploads();
+      // 所有任务完成，3秒后清理
+      setTimeout(() => {
+        cleanupUploadTasks();
+      }, 3000);
     }
   } catch (err) {
     console.error("Upload failed:", err);
@@ -326,11 +384,33 @@ function toggleSelectAllUploads(checked) {
   selectedUploadIds.value = checked ? filteredUploads.value.map((u) => u.id) : [];
 }
 
+// Session 相关逻辑优化：使用 localStorage 替代 URL query
+const STORAGE_KEY_SESSION = "rag.knowledge.sessionId";
+
+function getStoredSessionId() {
+  try {
+    return localStorage.getItem(STORAGE_KEY_SESSION) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storeSessionId(id) {
+  try {
+    if (id) {
+      localStorage.setItem(STORAGE_KEY_SESSION, id);
+    } else {
+      localStorage.removeItem(STORAGE_KEY_SESSION);
+    }
+  } catch {
+    // 忽略存储错误
+  }
+}
+
 watch(activeSessionId, (id) => {
   if (route.name !== "knowledge") return;
-  const q = typeof route.query.session === "string" ? route.query.session : "";
-  if ((id || "") === q) return;
-  router.replace({ name: "knowledge", query: id ? { session: id } : {} });
+  // 使用 localStorage 存储，不再暴露在 URL 中
+  storeSessionId(id || "");
 });
 
 watch(deleteDialogVisible, (v) => { if (!v) deleteDialogState.value.onConfirm = null; });
@@ -383,6 +463,7 @@ function handleUploadWsMessage(data) {
       const mappedProgress = 90 + Math.round(backendProgress * 0.1);
       task.progress = Math.max(task.progress, mappedProgress);
       task.status = "processing";
+      saveUploadTasks(); // 保存进度
     }
   } else if (data.type === "upload_complete") {
     const task = uploadTasks.value.find((t) => t.id === data.task_id);
@@ -390,6 +471,7 @@ function handleUploadWsMessage(data) {
       task.status = data.status;
       task.message = data.message;
       task.progress = data.status === "success" ? 100 : task.progress;
+      saveUploadTasks(); // 保存状态
     }
 
     if (data.status === "success" && data.upload) {
@@ -454,6 +536,7 @@ onBeforeRouteLeave((to, from, next) => {
 
 onMounted(async () => {
   pageLoading.value = true;
+  restoreUploadTasks(); // 恢复之前的上传任务
   try {
     user.value = getCurrentUser();
     preferences.value = getPreferences(user.value);
@@ -462,7 +545,7 @@ onMounted(async () => {
     modelSettings.chatModel = meta.chat_model || appConfig.chatModel;
     modelSettings.embeddingModel = meta.embedding_model || appConfig.embeddingModel;
     startupError.value = meta.startup_error || "";
-    const preferredId = typeof route.query.session === "string" ? route.query.session : "";
+    const preferredId = typeof route.query.session === "string" ? route.query.session : getStoredSessionId();
     await refreshSessions(preferredId);
     await refreshUploads();
 

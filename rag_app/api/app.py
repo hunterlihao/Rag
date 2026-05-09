@@ -378,21 +378,21 @@ class WebSocketManager:
                     last_active = self._last_activity.get(user_id, 0)
                 
                 if time.time() - last_active > self.HEARTBEAT_TIMEOUT:
-                    logger.warning("WebSocket心跳超时: %s", user_id)
+                    logger.info("WebSocket心跳超时,断开连接: %s", user_id)
                     self.disconnect(user_id)
                     break
                 
-                # 发送心跳
+                # 发送心跳(使用ping帧而非JSON消息,更轻量)
                 try:
-                    await websocket.send_json({"type": "ping"})
+                    await websocket.send_bytes(b'\x89\x00')  # WebSocket ping帧
                 except Exception:
-                    logger.warning("WebSocket心跳发送失败: %s", user_id)
+                    logger.debug("WebSocket心跳发送失败(连接已断开): %s", user_id)
                     self.disconnect(user_id)
                     break
         except asyncio.CancelledError:
             pass  # 任务被取消,正常退出
         except Exception as e:
-            logger.error("WebSocket心跳异常: %s, %s", user_id, str(e))
+            logger.debug("WebSocket心跳异常: %s, %s", user_id, str(e))
             self.disconnect(user_id)
 
     def disconnect(self, user_id: str):
@@ -782,17 +782,19 @@ def create_app() -> FastAPI:
                         # 更新活动时间
                         websocket_manager.update_activity(user_id)
                         
-                        # 处理pong响应
+                        # 处理pong响应和普通消息
                         try:
                             data = json.loads(message)
                             if data.get("type") == "pong":
+                                logger.debug("收到WebSocket pong: %s", user_id)
                                 continue
                         except (json.JSONDecodeError, KeyError):
-                            pass
+                            pass  # 忽略非JSON消息
                     except asyncio.TimeoutError:
-                        # 超时,连接可能已断开
-                        logger.warning("WebSocket接收超时: %s", user_id)
-                        break
+                        # 超时,这是正常的,客户端可能暂时空闲
+                        logger.debug("WebSocket接收超时(客户端空闲): %s", user_id)
+                        # 不break,继续等待下一次消息
+                        continue
             except WebSocketDisconnect:
                 websocket_manager.disconnect(user_id)
         except RuntimeError as e:

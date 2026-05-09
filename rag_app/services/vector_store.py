@@ -1,5 +1,7 @@
 import math
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -7,6 +9,12 @@ from langchain_core.documents import Document
 from rag_app import config
 
 logger = logging.getLogger(__name__)
+
+# 全局线程池,用于异步向量检索
+_executor = ThreadPoolExecutor(
+    max_workers=config.UPLOAD_MAX_WORKERS,
+    thread_name_prefix="vector-search"
+)
 
 
 def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
@@ -31,6 +39,7 @@ class VectorStoreService(object):
         )
 
     def retrieve_documents(self, query: str) -> list[Document]:
+        """检索文档,使用线程池避免阻塞事件循环"""
         # 优化2: 尝试从 Redis 缓存获取向量检索结果
         if self.redis_service:
             try:
@@ -45,14 +54,22 @@ class VectorStoreService(object):
             except Exception:
                 logger.debug("向量检索缓存读取失败,执行实际检索")
         
-        # 执行实际检索
-        scored_documents = self.similarity_search_with_scores(
-            query,
-            k=config.RETRIEVAL_FETCH_K,
-        )
-        filtered_documents = self.apply_similarity_threshold(scored_documents)
-        diversified_documents = self.apply_mmr(query, filtered_documents)
-        result_documents = diversified_documents[:config.MMR_CANDIDATE_K]
+        # 使用线程池执行检索,避免阻塞
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 在异步环境中,使用线程池
+                result_documents = asyncio.run_coroutine_threadsafe(
+                    self._retrieve_documents_async(query),
+                    loop
+                ).result(timeout=30)
+            else:
+                # 同步环境,直接执行
+                result_documents = self._retrieve_documents_sync(query)
+        except RuntimeError:
+            # 没有事件循环,同步执行
+            result_documents = self._retrieve_documents_sync(query)
         
         # 写入Redis缓存
         if self.redis_service and result_documents:
@@ -65,12 +82,32 @@ class VectorStoreService(object):
                     self.collection_name,
                     query,
                     cache_data,
-                    ttl=config.REDIS_CACHE_TTL_VECTOR_SEARCH  # 使用配置常量
+                    ttl=config.REDIS_CACHE_TTL_VECTOR_SEARCH
                 )
             except Exception:
                 logger.debug("向量检索缓存写入失败")
         
         return result_documents
+    
+    async def _retrieve_documents_async(self, query: str) -> list[Document]:
+        """异步版本的检索逻辑"""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _executor,
+            self._retrieve_documents_sync,
+            query
+        )
+    
+    def _retrieve_documents_sync(self, query: str) -> list[Document]:
+        """同步版本的检索逻辑,在线程池中执行"""
+        scored_documents = self.similarity_search_with_scores(
+            query,
+            k=config.RETRIEVAL_FETCH_K,
+        )
+        filtered_documents = self.apply_similarity_threshold(scored_documents)
+        diversified_documents = self.apply_mmr(query, filtered_documents)
+        return diversified_documents[:config.MMR_CANDIDATE_K]
 
     def similarity_search_with_scores(self, query: str, k: int) -> list[Document]:
         scored_results = self.vector_store.similarity_search_with_relevance_scores(query, k=k)

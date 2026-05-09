@@ -24,9 +24,15 @@ export function buildSidebarNavItems(user) {
   return items;
 }
 
+/**
+ * 构建路由位置
+ * 注意：Session ID 现在存储在 localStorage 中，不再暴露在 URL 中
+ * @param {string} name - 路由名称
+ * @param {string} sessionId - Session ID（仅用于内部传递，不放入 URL）
+ * @returns {object} 路由配置对象
+ */
 export function buildRouteLocation(name, sessionId = "") {
-  if (name === "workspace" || name === "knowledge") {
-    return { name, query: sessionId ? { session: sessionId } : {} };
-  }
+  // Session ID 通过 localStorage 存储，URL 保持简洁
+  // 如果需要在路由间传递 sessionId，调用方应该先存储到 localStorage
   return { name };
 }
