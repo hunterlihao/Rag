@@ -20,17 +20,13 @@ NO_CONTEXT_TEXT = "无资料"
 CHAT_CONTEXT_TEXT = "本轮选择普通聊天模式，未检索知识库。"
 RETRIEVAL_ERROR_CONTEXT_TEXT = "知识库检索暂时不可用。"
 
-# RAG检索缓存配置
-RETRIEVAL_CACHE_MAX_SIZE = 1000  # 最大缓存条目数
-RETRIEVAL_CACHE_TTL_SECONDS = 300  # 缓存过期时间: 5分钟
-
 
 class TTLCache:
-    """带TTL和大小限制的缓存实现"""
+    """帶TTL和大小限制的缓存实现"""
     
-    def __init__(self, max_size: int = 1000, ttl_seconds: int = 300):
-        self.max_size = max_size
-        self.ttl_seconds = ttl_seconds
+    def __init__(self, max_size: int = None, ttl_seconds: int = None):
+        self.max_size = max_size or config.RETRIEVAL_CACHE_MAX_SIZE
+        self.ttl_seconds = ttl_seconds or config.RETRIEVAL_CACHE_TTL_SECONDS
         self._cache: OrderedDict[str, dict] = OrderedDict()
         self._lock = __import__('threading').Lock()
     
@@ -337,10 +333,7 @@ class RagService(object):
         self.query_rewrite_chain_cache = {}
         self.rerank_chain_cache = {}
         # 修复: 使用带TTL和大小限制的缓存作为Redis的fallback
-        self._retrieval_cache = TTLCache(
-            max_size=RETRIEVAL_CACHE_MAX_SIZE,
-            ttl_seconds=RETRIEVAL_CACHE_TTL_SECONDS
-        )
+        self._retrieval_cache = TTLCache()  # 使用默认配置
 
     def get_query_rewrite_chain(self, chat_model_id: str | None):
         normalized_model_id = config.normalize_chat_model_id(chat_model_id)
@@ -467,7 +460,7 @@ class RagService(object):
                 self._redis_service.set_rag_retrieval(
                     cache_key,
                     documents,
-                    ttl=RETRIEVAL_CACHE_TTL_SECONDS
+                    ttl=config.RETRIEVAL_CACHE_TTL_SECONDS  # 使用配置常量
                 )
             except Exception:
                 logger.debug("Redis检索缓存写入失败,仅使用内存缓存")
@@ -482,11 +475,11 @@ class RagService(object):
             AIMessage(content=assistant_reply, additional_kwargs={"sources": sources or []}),
         ])
 
-    @staticmethod
-    def get_vector_service(user_id: str | None) -> VectorStoreService:
+    def get_vector_service(self, user_id: str | None) -> VectorStoreService:
         return VectorStoreService(
             config.OLLAMA_EMBEDDING_FUNCTION,
             user_id=user_id,
+            redis_service=self._redis_service,
         )
 
     def build_context(self, payload: dict) -> str:
@@ -603,9 +596,9 @@ class RagService(object):
         # 5. 截断并添加省略号(在段落边界处)
         if len(cleaned) > max_length:
             trunc_point = max_length
-            # 找最后一个换行或空格
-            while trunc_point > max_length * 0.6:
-                if cleaned[trunc_point] == "\n" or cleaned[trunc_point] == " ":
+            # 找最后一个换行或空格,避免截断单词
+            while trunc_point > max_length * 0.6 and trunc_point > 0:
+                if cleaned[trunc_point - 1] == "\n" or cleaned[trunc_point - 1] == " ":
                     break
                 trunc_point -= 1
             if trunc_point <= max_length * 0.6:

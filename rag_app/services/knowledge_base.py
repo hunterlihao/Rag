@@ -112,6 +112,25 @@ class KnowledgeBaseService(object):
                 "chunk_count": 0,
             }
 
+        # 检查是否重复上传(优先检查Redis缓存)
+        if content_sha256 and self.redis_service:
+            try:
+                cached = self.redis_service.get_upload_sha256(
+                    str(self.user_id),
+                    content_sha256
+                )
+                if cached and cached.get("duplicate"):
+                    # 重复文件,直接返回缓存信息
+                    return {
+                        "message": f"文件已存在: {cached.get('filename', filename)} (共 {cached.get('chunk_count', 0)} 个片段)",
+                        "duplicate": True,
+                        "content_sha256": content_sha256,
+                        "document_id": cached.get("doc_id"),
+                        "chunk_count": cached.get("chunk_count", 0),
+                    }
+            except Exception:
+                logger.debug("SHA256去重缓存检查失败")
+
         if len(normalized_text) > config.MAX_SPLIT_CHAR_NUM:
             knowledge_chunks: list[str] = self.spliter.split_text(normalized_text)
         else:
@@ -275,7 +294,7 @@ class KnowledgeBaseService(object):
                         self.redis_service.set_collection_meta(
                             str(self.user_id),
                             meta,
-                            ttl=300  # 5分钟
+                            ttl=config.REDIS_CACHE_TTL_COLLECTION_META  # 使用配置常量
                         )
                     except Exception:
                         pass

@@ -201,7 +201,7 @@ watch(() => messageScrollSignature.value, async () => {
                   <div class="text-xs font-medium text-zinc-500 mb-2">参考来源</div>
                   <div class="space-y-2">
                     <div
-                      v-for="(source, idx) in message.sources"
+                      v-for="(source, idx) in message.sources.slice(0, 5)"
                       :key="idx"
                       class="bg-white border border-zinc-200 rounded-lg p-3 hover:border-zinc-300 transition-colors"
                     >
@@ -210,6 +210,9 @@ watch(() => messageScrollSignature.value, async () => {
                         <span class="text-xs text-zinc-400 shrink-0">{{ source.score }}</span>
                       </div>
                       <p class="text-xs text-zinc-500 leading-relaxed whitespace-pre-wrap">{{ source.preview }}</p>
+                    </div>
+                    <div v-if="message.sources.length > 5" class="text-xs text-zinc-400 text-center py-1">
+                      还有 {{ message.sources.length - 5 }} 个来源未显示
                     </div>
                   </div>
                 </div>

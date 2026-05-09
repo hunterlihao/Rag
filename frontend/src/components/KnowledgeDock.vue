@@ -163,12 +163,12 @@ watch(() => props.uploadSearch, (v) => emit("update:upload-search", v));
         <div v-for="(task, i) in uploadTasks" :key="i" class="px-2 py-1.5 bg-white border border-zinc-100 rounded-lg">
           <div class="flex items-center justify-between mb-1">
             <span class="text-xs text-zinc-600 truncate flex-1">{{ task.name || task.filename }}</span>
-            <span :class="['text-[10px] font-medium ml-2', task.status === 'success' ? 'text-emerald-600' : task.status === 'error' ? 'text-red-500' : 'text-zinc-500']">{{ resolveTaskLabel(task.status) }}</span>
+            <span :class="['text-[10px] font-medium ml-2', task.status === 'success' ? 'text-emerald-600' : task.status === 'error' ? 'text-red-500' : task.status === 'duplicate' ? 'text-amber-600' : 'text-zinc-500']">{{ resolveTaskLabel(task.status) }}</span>
           </div>
           <div class="flex items-center gap-2">
             <div class="flex-1 h-1.5 bg-zinc-100 rounded-full overflow-hidden">
               <div
-                :class="['h-full rounded-full transition-all duration-300', task.status === 'success' ? 'bg-emerald-500' : task.status === 'error' ? 'bg-red-400' : 'bg-zinc-900']"
+                :class="['h-full rounded-full transition-all duration-300', task.status === 'success' ? 'bg-emerald-500' : task.status === 'error' ? 'bg-red-400' : task.status === 'duplicate' ? 'bg-amber-500' : 'bg-zinc-900']"
                 :style="{ width: `${task.progress || 0}%` }"
               />
             </div>

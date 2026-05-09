@@ -305,14 +305,38 @@ export function connectUploadWebSocket(onMessage) {
     uploadWebSocket.close();
   }
 
+  // 安全修复: 不再通过URL参数传递Token
   const apiBase = import.meta.env.VITE_PROXY_TARGET || "http://127.0.0.1:8520";
-  const wsUrl = `${apiBase.replace(/^http/, "ws")}/ws/uploads?token=${encodeURIComponent(session.token)}`;
+  const wsUrl = `${apiBase.replace(/^http/, "ws")}/ws/uploads`;
 
   uploadWebSocket = new WebSocket(wsUrl);
+
+  uploadWebSocket.onopen = () => {
+    // 连接建立后立即发送认证消息
+    uploadWebSocket.send(JSON.stringify({
+      type: "auth",
+      token: session.token
+    }));
+  };
 
   uploadWebSocket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      
+      // 处理认证成功响应
+      if (data.type === "auth_success") {
+        console.log("WebSocket认证成功");
+        return;
+      }
+      
+      // 处理认证失败
+      if (data.type === "auth_failed" || data.type === "error") {
+        console.error("WebSocket认证失败:", data.message);
+        uploadWebSocket.close();
+        return;
+      }
+      
+      // 正常消息处理
       if (typeof onMessage === "function") {
         onMessage(data);
       }

@@ -344,12 +344,8 @@ class WebSocketManager:
         self._last_activity: dict[str, float] = {}  # 最后活动时间
     
     async def connect(self, websocket: WebSocket, user_id: str):
-        # 修复: 检查连接数限制
-        with self._lock:
-            if len(self._connections) >= self.MAX_CONNECTIONS:
-                raise RuntimeError(f"WebSocket连接数已达上限({self.MAX_CONNECTIONS})")
-        
-        await websocket.accept()
+        # 注意: 不再调用websocket.accept(),因为端点函数已经在认证前accept了
+        # 连接数检查也在端点中完成了,这里只负责管理连接
         with self._lock:
             # 如果已有连接，先关闭
             if user_id in self._connections:
@@ -491,7 +487,7 @@ def get_current_user(
 
 def delete_upload_entry(database: Session, user, upload):
     """删除上传条目 - 同时删除向量库中的文档和数据库中的记录"""
-    kb_service = KnowledgeBaseService(user.id)
+    kb_service = KnowledgeBaseService(user.id, redis_service=redis_service)
     delete_result = kb_service.delete_document(document_id=upload.vector_doc_id)
     workspace_service.delete_upload_with_registry(database, upload)
     return delete_result
@@ -660,12 +656,55 @@ def create_app() -> FastAPI:
         }
 
     @app.websocket("/ws/uploads")
-    async def websocket_upload_progress(websocket: WebSocket, token: str):
-        """WebSocket 端点,用于推送上传进度"""
+    async def websocket_upload_progress(websocket: WebSocket):
+        """WebSocket 端点,用于推送上传进度
+        
+        安全修复: Token不再通过URL参数传递,改为握手后第一条消息传递
+        防止Token被记录在服务器日志、代理日志、浏览器历史中
+        """
         database = SessionLocal()
         try:
-            # 安全漏洞修复2: 完整的Token验证逻辑
-            # 1. 解码Token
+            # 0. 先检查连接数限制(在accept之前)
+            if websocket_manager.get_connection_count() >= websocket_manager.MAX_CONNECTIONS:
+                # 连接数已满,直接拒绝,不accept
+                await websocket.close(
+                    code=status.WS_1008_POLICY_VIOLATION,
+                    reason=f"WebSocket连接数已达上限({websocket_manager.MAX_CONNECTIONS})"
+                )
+                return
+            
+            # 1. 接受WebSocket连接
+            await websocket.accept()
+            
+            # 2. 等待客户端发送认证消息(超时30秒)
+            try:
+                auth_message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=config.WS_AUTH_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                await websocket.close(
+                    code=status.WS_1008_POLICY_VIOLATION, 
+                    reason="认证超时:未在规定时间内发送认证消息"
+                )
+                return
+            
+            # 3. 解析认证消息
+            try:
+                auth_data = json.loads(auth_message)
+                if auth_data.get("type") != "auth":
+                    raise ValueError("非认证消息")
+                token = auth_data.get("token", "").strip()
+                if not token:
+                    raise ValueError("Token为空")
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                await websocket.close(
+                    code=status.WS_1008_POLICY_VIOLATION, 
+                    reason=f"认证失败:消息格式错误 - {str(e)}"
+                )
+                return
+            
+            # 4. 完整的Token验证逻辑
             try:
                 payload = auth_service.decode_access_token(token)
             except Exception:
@@ -677,23 +716,26 @@ def create_app() -> FastAPI:
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token缺少用户标识")
                 return
                 
-            # 2. 检查Token是否已吊销
+            # 5. 检查Token是否已吊销
             if auth_service.is_token_revoked(payload):
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token已吊销")
                 return
                 
-            # 3. 检查用户是否存在
+            # 6. 检查用户是否存在
             user = auth_service.get_user(database, user_id)
             if user is None:
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:用户不存在")
                 return
                 
-            # 4. 检查Token版本是否匹配
+            # 7. 检查Token版本是否匹配
             if not auth_service.is_token_current(payload, user):
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败:Token已过期")
                 return
+            
+            # 8. 发送认证成功消息
+            await websocket.send_json({"type": "auth_success", "message": "认证成功"})
                 
-            # 5. 验证通过,建立连接
+            # 9. 验证通过,建立连接
             await websocket_manager.connect(websocket, user_id)
             try:
                 while True:
@@ -1333,12 +1375,27 @@ def create_app() -> FastAPI:
                 )
 
                 if registry is None:
+                    # 重复文件,也需要生成task_id用于WebSocket推送
+                    task_id = str(uuid.uuid4())
                     upload_tasks.append({
-                        "task_id": str(uuid.uuid4()),
+                        "task_id": task_id,
                         "filename": item["filename"],
                         "size": item["size_bytes"],
-                        "status": "warning",
+                        "status": "duplicate",  # 使用duplicate状态
                         "message": DUPLICATE_MESSAGE,
+                    })
+                    # 重复文件也要加入file_data_list,通过WebSocket推送完成消息
+                    file_data_list.append({
+                        "task_id": task_id,
+                        "user_id": user.id,
+                        "filename": item["filename"],
+                        "content_type": item["content_type"],
+                        "size_bytes": item["size_bytes"],
+                        "content_sha256": content_sha256,
+                        "registry_id": None,  # 重复文件没有registry
+                        "file_content": None,  # 不需要文件内容
+                        "uploader_name": user.name,
+                        "is_duplicate": True,  # 标记为重复
                     })
                     continue
 
@@ -1394,6 +1451,17 @@ def process_uploads_background(file_data_list: list[dict], user_id: str):
             filename = file_data["filename"]
 
             try:
+                # 检查是否是重复文件
+                if file_data.get("is_duplicate"):
+                    # 重复文件,直接推送完成消息
+                    asyncio.run(websocket_manager.send_upload_complete(user_id, {
+                        "task_id": task_id,
+                        "filename": filename,
+                        "status": "duplicate",
+                        "message": file_data.get("message", "文件已存在"),
+                    }))
+                    continue
+
                 # 发送处理中状态
                 asyncio.run(websocket_manager.send_upload_progress(user_id, {
                     "task_id": task_id,
@@ -1404,7 +1472,7 @@ def process_uploads_background(file_data_list: list[dict], user_id: str):
 
                 # 处理文件
                 file_obj = io.BytesIO(file_data["file_content"])
-                upload_result = KnowledgeBaseService(user_id).upload_by_file(
+                upload_result = KnowledgeBaseService(user_id, redis_service=redis_service).upload_by_file(
                     file_obj,
                     filename,
                     content_sha256=file_data["content_sha256"],
@@ -1412,7 +1480,7 @@ def process_uploads_background(file_data_list: list[dict], user_id: str):
 
                 message = str(upload_result.get("message", "")).strip()
                 if upload_result.get("duplicate"):
-                    status_value = "warning"
+                    status_value = "duplicate"  # 使用duplicate状态,前端会显示"已存在"
                 elif upload_result.get("document_id"):
                     status_value = "success"
                 else:
@@ -1446,7 +1514,7 @@ def process_uploads_background(file_data_list: list[dict], user_id: str):
                     except Exception:
                         logger.exception("Failed to persist upload record.")
                         try:
-                            KnowledgeBaseService(user_id).delete_document(
+                            KnowledgeBaseService(user_id, redis_service=redis_service).delete_document(
                                 document_id=upload_result.get("document_id")
                             )
                         except Exception:

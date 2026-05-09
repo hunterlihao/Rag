@@ -223,7 +223,7 @@ async function importFiles(fileList) {
           if (task.status === "processing") {
             localTask.progress = Math.max(localTask.progress, 90);
             pendingTaskIds.value.add(task.task_id);
-          } else if (task.status === "success" || task.status === "error" || task.status === "warning") {
+          } else if (task.status === "success" || task.status === "error" || task.status === "warning" || task.status === "duplicate") {
             localTask.progress = 100;
           }
         }
@@ -377,7 +377,12 @@ function handleUploadWsMessage(data) {
     }
 
     setTimeout(() => {
-      uploadTasks.value = uploadTasks.value.filter((t) => t.status !== "success" && t.status !== "error" && t.status !== "warning");
+      uploadTasks.value = uploadTasks.value.filter((t) => 
+        t.status !== "success" && 
+        t.status !== "error" && 
+        t.status !== "warning" && 
+        t.status !== "duplicate"  // 重复文件也在5秒后清理
+      );
     }, 5000);
   }
 }

@@ -71,6 +71,33 @@ POSTGRES_ENGINE_ARGS = {
 
 SUPPORTED_UPLOAD_EXTENSIONS = ["txt", "md", "pdf", "docx", "xlsx", "xls", "csv"]
 
+# 文件魔数验证配置 (文件头部的magic bytes)
+FILE_MAGIC_SIGNATURES = {
+    "pdf": [b"%PDF-"],  # PDF文件以%PDF-开头
+    "docx": [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"],  # DOCX是ZIP格式
+    "xlsx": [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"],  # XLSX是ZIP格式
+    "xls": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"],  # 老式Excel文件
+}
+
+# 允许文本文件的最小字节数
+MIN_TEXT_FILE_SIZE = 1
+
+# WebSocket配置
+WS_AUTH_TIMEOUT_SECONDS = 30  # WebSocket认证超时时间
+
+# Redis缓存TTL配置(秒)
+REDIS_CACHE_TTL_VECTOR_SEARCH = 600  # 向量检索缓存: 10分钟
+REDIS_CACHE_TTL_QUERY_INTENT = 3600  # 查询意图缓存: 1小时
+REDIS_CACHE_TTL_MODEL_STATUS = 3600  # 模型状态缓存: 1小时
+REDIS_CACHE_TTL_USER_PREFERENCES = 86400  # 用户偏好缓存: 24小时
+REDIS_CACHE_TTL_UPLOAD_SHA256 = 604800  # 上传SHA256缓存: 7天
+REDIS_CACHE_TTL_COLLECTION_META = 300  # 知识库元信息缓存: 5分钟
+REDIS_CACHE_TTL_SESSION_MESSAGES = 1800  # 会话消息缓存: 30分钟
+
+# RAG检索缓存配置
+RETRIEVAL_CACHE_MAX_SIZE = 1000  # 最大缓存条目数
+RETRIEVAL_CACHE_TTL_SECONDS = 300  # 缓存过期时间: 5分钟
+
 OLLAMA_EMBEDDING_FUNCTION = OllamaEmbeddings(
     model=os.getenv("RAG_EMBEDDING_MODEL", "qwen3-embedding:latest"),
     base_url=os.getenv("RAG_OLLAMA_BASE_URL", "http://localhost:11434"),

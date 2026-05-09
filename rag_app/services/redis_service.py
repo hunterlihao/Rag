@@ -130,17 +130,21 @@ class RedisService:
     # ========== 优化2: 向量检索结果缓存 ==========
     def get_vector_search(self, collection_name: str, query_text: str) -> list | None:
         """获取向量检索缓存"""
-        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        # 安全优化: 使用SHA256替代MD5,防止哈希碰撞攻击
+        query_hash = hashlib.sha256(query_text.encode()).hexdigest()
         key = self._key("vector", "search", collection_name, query_hash)
         payload = self._run(self.client.get, key)
         if not payload:
             return None
         return json.loads(payload)
     
-    def set_vector_search(self, collection_name: str, query_text: str, documents: list, ttl: int = 600):
+    def set_vector_search(self, collection_name: str, query_text: str, documents: list, ttl: int = None):
         """设置向量检索缓存,默认10分钟"""
-        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        # 安全优化: 使用SHA256替代MD5
+        query_hash = hashlib.sha256(query_text.encode()).hexdigest()
         key = self._key("vector", "search", collection_name, query_hash)
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_VECTOR_SEARCH
         self._run(
             self.client.setex,
             key,
@@ -164,9 +168,11 @@ class RedisService:
             return None
         return json.loads(payload)
     
-    def set_model_status(self, model_id: str, status: dict, ttl: int = 3600):
+    def set_model_status(self, model_id: str, status: dict, ttl: int = None):
         """设置模型加载状态,默认1小时"""
         key = self._key("model", "status", model_id)
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_MODEL_STATUS
         self._run(
             self.client.setex,
             key,
@@ -183,9 +189,11 @@ class RedisService:
             return None
         return json.loads(payload)
     
-    def set_user_preferences(self, user_id: str, preferences: dict, ttl: int = 86400):
+    def set_user_preferences(self, user_id: str, preferences: dict, ttl: int = None):
         """设置用户偏好设置,默认24小时"""
         key = self._key("user", "preferences", user_id)
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_USER_PREFERENCES
         self._run(
             self.client.setex,
             key,
@@ -207,9 +215,11 @@ class RedisService:
             return None
         return json.loads(payload)
     
-    def set_upload_sha256(self, user_id: str, content_sha256: str, doc_info: dict, ttl: int = 604800):
+    def set_upload_sha256(self, user_id: str, content_sha256: str, doc_info: dict, ttl: int = None):
         """设置上传文档SHA256去重缓存,默认7天"""
         key = self._key("upload", "sha256", user_id, content_sha256)
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_UPLOAD_SHA256
         self._run(
             self.client.setex,
             key,
@@ -226,9 +236,11 @@ class RedisService:
             return None
         return json.loads(payload)
     
-    def set_collection_meta(self, user_id: str, meta: dict, ttl: int = 300):
+    def set_collection_meta(self, user_id: str, meta: dict, ttl: int = None):
         """设置知识库集合元信息,默认5分钟"""
         key = self._key("collection", "meta", user_id)
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_COLLECTION_META
         self._run(
             self.client.setex,
             key,
@@ -244,14 +256,18 @@ class RedisService:
     # ========== 优化7: 问答意图分类缓存 ==========
     def get_query_intent(self, query_text: str) -> str | None:
         """获取查询意图分类"""
-        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        # 安全优化: 使用SHA256替代MD5
+        query_hash = hashlib.sha256(query_text.encode()).hexdigest()
         key = self._key("intent", "query", query_hash)
         return self._run(self.client.get, key)
     
-    def set_query_intent(self, query_text: str, intent: str, ttl: int = 3600):
+    def set_query_intent(self, query_text: str, intent: str, ttl: int = None):
         """设置查询意图分类,默认1小时"""
-        query_hash = hashlib.md5(query_text.encode()).hexdigest()
+        # 安全优化: 使用SHA256替代MD5
+        query_hash = hashlib.sha256(query_text.encode()).hexdigest()
         key = self._key("intent", "query", query_hash)
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_QUERY_INTENT
         self._run(self.client.setex, key, ttl, intent)
     
     # ========== 优化9: 用户会话消息热点缓存 ==========
@@ -263,9 +279,11 @@ class RedisService:
             return None
         return json.loads(payload)
     
-    def set_session_messages(self, session_id: str, messages: list, ttl: int = 1800):
+    def set_session_messages(self, session_id: str, messages: list, ttl: int = None):
         """设置会话消息热点缓存,默认30分钟"""
         key = self._key("session", "messages", session_id, "recent")
+        if ttl is None:
+            ttl = config.REDIS_CACHE_TTL_SESSION_MESSAGES
         self._run(
             self.client.setex,
             key,

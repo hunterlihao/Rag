@@ -65,7 +65,7 @@ class VectorStoreService(object):
                     self.collection_name,
                     query,
                     cache_data,
-                    ttl=600  # 10分钟
+                    ttl=config.REDIS_CACHE_TTL_VECTOR_SEARCH  # 使用配置常量
                 )
             except Exception:
                 logger.debug("向量检索缓存写入失败")
